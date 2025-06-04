@@ -1,0 +1,119 @@
+Option Explicit
+
+'--------------------------------------------
+' Close the Form
+'--------------------------------------------
+Private Sub cmdClose_Click()
+    Unload Me
+End Sub
+
+'--------------------------------------------
+' Update the "Adjustment Table" for the selected sheet
+'--------------------------------------------
+Private Sub cmdUpdate_Click()
+    Dim selectedSheet As String
+    Dim adjSheet As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim newValue As String
+    Dim found As Boolean
+    
+    ' Ensure a sheet is selected from the listbox.
+    If Me.lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list.", vbExclamation
+        Exit Sub
+    End If
+    
+    selectedSheet = Trim(Me.lstboxSheets.Value)
+    Set adjSheet = ThisWorkbook.Sheets("Adjustment Table")
+    
+    ' Determine which value to store based on checkbox selection.
+    If Me.cbYes.Value = True Then
+        newValue = "Y"
+    ElseIf Me.cbNA.Value = True Then
+        newValue = "NA"
+    Else
+        newValue = "" ' Neither checkbox is selected.
+    End If
+    
+    ' Find the row in the Adjustment Table (Column A holds sheet names).
+    lastRow = adjSheet.Cells(adjSheet.Rows.Count, "A").End(xlUp).Row
+    For i = 1 To lastRow
+        If Trim(adjSheet.Cells(i, 1).Value) = selectedSheet Then
+            adjSheet.Cells(i, 2).Value = newValue
+            found = True
+            Exit For
+        End If
+    Next i
+    
+    If found Then
+        MsgBox "Update successful!", vbInformation
+    Else
+        MsgBox "Sheet not found in 'Adjustment Table'.", vbExclamation
+    End If
+End Sub
+
+'--------------------------------------------
+' Initialize the Form: Set size & populate sheet list
+'--------------------------------------------
+Private Sub UserForm_Initialize()
+    Dim ws As Worksheet
+    
+    ' Set the dimensions of the form.
+    Me.Height = 305.25    ' Adjust height as needed.
+    Me.Width = 252        ' Adjust width as needed.
+    
+    ' Optionally, you can manually position the form:
+    ' Me.StartUpPosition = 0 ' Manual positioning.
+    ' Me.Top = 180
+    ' Me.Left = 1655
+    
+    ' Clear the sheet list first.
+    Me.lstboxSheets.Clear
+    
+    ' Loop through all worksheets, and add only visible sheets (excludes "BACKGROUND").
+    For Each ws In ThisWorkbook.Worksheets
+        If ws.Visible = xlSheetVisible And ws.Name <> "BACKGROUND" Then
+            Me.lstboxSheets.AddItem ws.Name
+        End If
+    Next ws
+End Sub
+
+'--------------------------------------------
+' When the selected item in lstboxSheets changes,
+' reset checkboxes and load the adjustment status.
+'--------------------------------------------
+Private Sub lstboxSheets_Change()
+    Dim selectedSheet As String
+    Dim adjSheet As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim found As Boolean
+    
+    ' Reset checkboxes.
+    Me.cbYes.Value = False
+    Me.cbNA.Value = False
+    
+    selectedSheet = Trim(Me.lstboxSheets.Value)
+    Set adjSheet = ThisWorkbook.Sheets("Adjustment Table")
+    
+    ' Find the last row in Column A (which holds sheet names).
+    lastRow = adjSheet.Cells(adjSheet.Rows.Count, "A").End(xlUp).Row
+    
+    ' Loop through the "Adjustment Table" to check for an existing record.
+    For i = 1 To lastRow
+        If Trim(adjSheet.Cells(i, 1).Value) = selectedSheet Then
+            Select Case UCase(Trim(adjSheet.Cells(i, 2).Value))
+                Case "Y"
+                    Me.cbYes.Value = True
+                Case "NA"
+                    Me.cbNA.Value = True
+            End Select
+            found = True
+            Exit For
+        End If
+    Next i
+    
+    ' Optionally, you can notify the user if the sheet wasn't found.
+    ' If Not found Then MsgBox "Sheet not found in Adjustment Table."
+End Sub
