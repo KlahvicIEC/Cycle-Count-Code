@@ -1,0 +1,1245 @@
+Option Explicit
+
+#If VBA7 Then
+    Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
+#Else
+    ' Private Declare Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
+#End If
+
+Private Const SM_CXSCREEN As Long = 0
+Private Const SM_CYSCREEN As Long = 1
+
+Private Sub btnTransfer_Click()
+    Dim i As Integer
+    
+    ' Loop through all selected items in lstboxBins and transfer them to lstboxCycle
+    For i = 0 To lstboxBins.ListCount - 1
+        If lstboxBins.Selected(i) Then
+            lstboxCycle.AddItem lstboxBins.List(i)
+            lstboxBins.Selected(i) = False ' Clear the selection
+        End If
+    Next i
+End Sub
+
+Private Sub UserForm_Activate()
+    On Error Resume Next
+    
+    ' Refresh all worksheet data connections
+    Dim ws As Worksheet
+    For Each ws In ThisWorkbook.Worksheets
+        ws.ListObjects.RefreshAll
+    Next ws
+    
+    ' Refresh all workbook connections
+    ThisWorkbook.RefreshAll
+    
+    On Error GoTo 0
+    Call UpdateAccuracy
+End Sub
+
+' Event: Clear lstboxCycle
+Private Sub btnClearCycle_Click()
+    ' Clear all items from lstboxCycle
+    lstboxCycle.Clear
+    txtSrch1.Value = ""
+End Sub
+
+Private Sub btnCloseForm_Click()
+    Unload Me ' This closes the form
+End Sub
+
+Private Sub btnExportBins_Click()
+    On Error GoTo ExportError
+
+    Dim wsSource As Worksheet, wsNew As Worksheet
+    Dim lastRow As Long, rowIndex As Long, newRow As Long
+    Dim selectedBins As Object
+    Dim sheetName As String
+    Dim i As Integer, templateChoice As Integer
+    Dim userInput As String
+    Dim userXX As String, userDate As String, finalSheetName As String
+    Dim currentDate As String
+    Dim invalidChars As String
+    Dim isValidName As Boolean
+    Dim templateStr As String
+    Dim assignedUser As String
+    Dim userList As String
+    Dim headerRange As Range, dataRange As Range
+
+    ' Set source worksheet
+    Set wsSource = ThisWorkbook.Sheets("Items")
+    
+    ' Get selected bins from lstboxCycle
+    Set selectedBins = CreateObject("Scripting.Dictionary")
+    
+    If lstboxCycle.ListCount = 0 Then
+        MsgBox "No bins have been selected for export.", vbExclamation
+        Exit Sub
+    End If
+    
+    For i = 0 To lstboxCycle.ListCount - 1
+        selectedBins(lstboxCycle.List(i, 0)) = True
+    Next i
+    
+    ' Step 1: Ask user for template selection via InputBox
+    userInput = InputBox("Select Template (1-5):" & vbCrLf & _
+                         "1) MAIN BIN CYCLE COUNT" & vbCrLf & _
+                         "2) SHORTAGE CYCLE COUNT" & vbCrLf & _
+                         "3) MULTI-PART CYCLE COUNT" & vbCrLf & _
+                         "4) MULTI BIN CYCLE COUNT" & vbCrLf & _
+                         "5) INVOICE TO P21 DISCREPANCY", "Template Selection")
+
+    If userInput = "" Or Not IsNumeric(userInput) Or CInt(userInput) < 1 Or CInt(userInput) > 5 Then
+        MsgBox "Invalid selection. Process cancelled.", vbExclamation
+        Exit Sub
+    End If
+
+    templateChoice = CInt(userInput)
+    Select Case templateChoice
+        Case 1: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 2: templateStr = "SCC – XX Parts – MM-DD-YYYY"
+        Case 3: templateStr = "MPCC – XX Parts – MM-DD-YYYY"
+        Case 4: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 5: templateStr = "IP21D - XX Parts - MM-DD-YYYY"
+    End Select
+
+    ' Step 2: Ask user for "XX" value
+    userXX = InputBox("Enter count for 'XX':", "XX Value")
+    If Trim(userXX) = "" Then Exit Sub
+
+    ' Step 3: Ask user for the date
+    userDate = InputBox("Enter today's date:", "Date Entry", Format(Date, "MM-DD-YYYY"))
+    If Trim(userDate) = "" Then Exit Sub
+
+    ' Construct final sheet name
+    finalSheetName = Replace(templateStr, "XX", Trim(userXX))
+    finalSheetName = Replace(finalSheetName, "MM-DD-YYYY", Trim(userDate))
+
+    ' Validate sheet name
+    invalidChars = "\/[]?*:<>|"
+    isValidName = True
+    For i = 1 To Len(invalidChars)
+        If InStr(finalSheetName, Mid(invalidChars, i, 1)) > 0 Then
+            MsgBox "Invalid character found in sheet name.", vbExclamation
+            Exit Sub
+        End If
+    Next i
+
+    If Len(finalSheetName) > 31 Then
+        MsgBox "Sheet name too long.", vbExclamation
+        Exit Sub
+    End If
+    
+    sheetName = finalSheetName
+
+    ' Check if sheet already exists
+    If SheetExists(sheetName) Then
+        If MsgBox("Sheet '" & sheetName & "' exists. Overwrite?", vbYesNo + vbExclamation) = vbNo Then Exit Sub
+        Application.DisplayAlerts = False
+        ThisWorkbook.Sheets(sheetName).Delete
+        Application.DisplayAlerts = True
+    End If
+
+    ' Create new worksheet
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    wsNew.Name = sheetName
+
+    currentDate = Format(Date, "mmmm dd, yyyy")
+
+    ' Step 4: Assign Initial Counter
+    Dim userChoice As Integer
+
+    ' Define available users
+    userList = "1) Ken Lahvic" & vbCrLf & _
+           "2) Scott Frazier" & vbCrLf & _
+           "3) Trever Oelschlaeger" & vbCrLf & _
+           "4) Blake Arlowe" & vbCrLf & _
+           "5) Aaron Rivera" & vbCrLf & _
+           "6) Chris Lynch"
+
+    ' Prompt user selection
+    userInput = InputBox("Select Initial Counter by entering a number (1-6):" & vbCrLf & vbCrLf & userList, "Assign Initial Counter")
+
+    ' Validate user input
+    If userInput = "" Or Not IsNumeric(userInput) Then
+    MsgBox "Invalid selection. Process cancelled.", vbExclamation
+    Exit Sub
+    End If
+
+    userChoice = CInt(userInput)
+    If userChoice < 1 Or userChoice > 6 Then
+    MsgBox "Please enter a number between 1 and 6.", vbExclamation
+    Exit Sub
+    End If
+
+    ' Assign user based on choice
+    Select Case userChoice
+        Case 1: assignedUser = "Ken Lahvic"
+        Case 2: assignedUser = "Scott Frazier"
+        Case 3: assignedUser = "Trever Oelschlaeger"
+        Case 4: assignedUser = "Blake Arlowe"
+        Case 5: assignedUser = "Aaron Rivera"
+        Case 6: assignedUser = "Chris Lynch"
+    End Select
+
+    ' Update header row with assigned user
+    wsNew.Range("A1").Value = sheetName & " - " & currentDate & " | Initial Counter: " & assignedUser
+    wsNew.Range("A1").HorizontalAlignment = xlCenter
+    wsNew.Range("A1").Font.Bold = True
+    wsNew.Range("A1").Font.Size = 14
+
+
+    ' Step 5: Update header row with assigned user
+    With wsNew
+        .Range("A1:G1").Merge
+        .Range("A1").Value = sheetName & " - " & currentDate & " | Initial Counter: " & assignedUser
+        .Range("A1").HorizontalAlignment = xlCenter
+        .Range("A1").Font.Bold = True
+        .Range("A1").Font.Size = 14
+    End With
+
+    ' Step 6: Add Headers
+    With wsNew
+        .Cells(2, 1).Value = "Bin"
+        .Cells(2, 2).Value = "Item"
+        .Cells(2, 3).Value = "Description"
+        .Cells(2, 4).Value = "P21 Count"
+        .Cells(2, 5).Value = "Actual Count"
+        .Cells(2, 6).Value = "Discrepancy"
+        .Cells(2, 7).Value = "Notes"
+        
+        Set headerRange = .Range("A2:G2")
+        headerRange.Font.Bold = True
+        headerRange.Interior.Color = RGB(200, 200, 200)
+        headerRange.HorizontalAlignment = xlCenter
+        headerRange.Borders.LineStyle = xlContinuous
+    End With
+    
+    wsNew.Columns("B").NumberFormat = "@"
+
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    newRow = 3
+
+    ' Step 7: Populate Data
+    For rowIndex = 2 To lastRow
+        If selectedBins.exists(wsSource.Cells(rowIndex, 1).Value) Then
+            With wsNew
+                .Cells(newRow, 1).Value = wsSource.Cells(rowIndex, 1).Value
+                .Cells(newRow, 2).Value = wsSource.Cells(rowIndex, 2).Text
+                .Cells(newRow, 3).Value = wsSource.Cells(rowIndex, 3).Value
+                .Cells(newRow, 4).Value = wsSource.Cells(rowIndex, 6).Value
+                .Cells(newRow, 5).Value = ""
+                .Cells(newRow, 6).Formula = "=E" & newRow & "-D" & newRow
+                .Cells(newRow, 7).Value = ""
+            End With
+            newRow = newRow + 1
+        End If
+    Next rowIndex
+    
+    Set dataRange = wsNew.Range("A2:G" & newRow - 1)
+    With dataRange
+        .Borders.LineStyle = xlContinuous
+        .HorizontalAlignment = xlCenter
+    End With
+    
+    'Set Specific Column Widths
+    With wsNew
+        .Columns("A").ColumnWidth = 18
+        .Columns("D").ColumnWidth = 15
+        .Columns("E").ColumnWidth = 15
+        .Columns("F").ColumnWidth = 15
+        .Columns("G").ColumnWidth = 30
+        .Columns("B").AutoFit
+        .Columns("C").AutoFit
+    End With
+    
+    Dim r As Long
+    For r = 1 To newRow - 1
+        wsNew.Rows(r).rowHeight = 25
+    Next r
+    
+    wsNew.Range("D3:D" & newRow - 1).NumberFormat = "0"
+    wsNew.Range("F3:F" & newRow - 1).NumberFormat = "0"
+    
+    With wsNew
+        .Activate
+        .Range("A3").Select
+        ActiveWindow.FreezePanes = True
+    End With
+    
+    'Apply Conditional Formatting
+    Dim lastDataRow As Long
+        lastDataRow = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).Row
+    
+        With wsNew.Range("A3:G" & lastDataRow).FormatConditions.Add(Type:=xlExpression, Formula1:="=$F3<>0")
+            .Interior.Color = RGB(255, 255, 153)
+    End With
+    
+    'Sort the Sheet
+    With wsNew.Sort
+        .SortFields.Clear
+        .SortFields.Add key:=wsNew.Range("A3:A" & lastDataRow), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange wsNew.Range("A2:G" & lastDataRow)
+        .Header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+        
+    ' Step 8: Final Formatting & Refresh
+    Call PopulateSheetsList
+
+    Exit Sub
+
+ExportError:
+    MsgBox "An error occurred: " & Err.description, vbCritical, "Error"
+End Sub
+
+Function SheetExists(sheetName As String) As Boolean
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    SheetExists = Not ws Is Nothing
+    On Error GoTo 0
+End Function
+
+Private Sub PopulateSheetsList()
+    Dim ws As Worksheet
+    Dim adjustSheet As Worksheet
+    Dim sheetName As String
+    Dim visibleSheets As Collection
+    Dim lastRow As Long, i As Long, r As Long
+    Dim wsName As Variant
+    Dim dictVisible As Object, dictAdjustment As Object
+    
+    ' Ensure the "Adjustment Table" sheet exists.
+    On Error Resume Next
+    Set adjustSheet = ThisWorkbook.Sheets("Adjustment Table")
+    On Error GoTo 0
+    If adjustSheet Is Nothing Then
+        MsgBox "The 'Adjustment Table' sheet is missing.", vbCritical
+        Exit Sub
+    End If
+
+    ' Initialize a collection and dictionary for valid (visible) sheet names.
+    Set visibleSheets = New Collection
+    Set dictVisible = CreateObject("Scripting.Dictionary")
+    
+    ' Clear ListBox (assuming lstboxSheets is your control on a userform)
+    lstboxSheets.Clear
+
+    ' Loop through all sheets to collect valid ones.
+    For Each ws In ThisWorkbook.Sheets
+        sheetName = ws.Name
+        ' Skip unwanted sheets.
+        If ws.Visible = xlSheetVisible And _
+           sheetName <> "Items" And _
+           sheetName <> "Last Count Dates" And _
+           sheetName <> "HoldList" And _
+           sheetName <> "Dashboard" And _
+           sheetName <> "BACKGROUND" And _
+           sheetName <> "Adjustment Table" And _
+           sheetName <> "Random Cycle Count Log" Then
+            lstboxSheets.AddItem sheetName     ' Add to ListBox.
+            visibleSheets.Add sheetName          ' Add to our collection.
+            dictVisible(sheetName) = True        ' Mark as valid.
+        End If
+    Next ws
+    
+    ' Build a dictionary of sheet names currently in the "Adjustment Table".
+    Set dictAdjustment = CreateObject("Scripting.Dictionary")
+    lastRow = adjustSheet.Cells(adjustSheet.Rows.Count, "A").End(xlUp).Row
+    For r = 1 To lastRow
+        sheetName = Trim(adjustSheet.Cells(r, "A").Value)
+        If Len(sheetName) > 0 Then
+            dictAdjustment(sheetName) = True
+        End If
+    Next r
+
+    ' Remove rows from "Adjustment Table" that are no longer valid.
+    For i = lastRow To 1 Step -1
+        sheetName = Trim(adjustSheet.Cells(i, "A").Value)
+        If sheetName <> "" And Not dictVisible.exists(sheetName) Then
+            adjustSheet.Rows(i).Delete
+        End If
+    Next i
+    
+    ' Refresh lastRow after the deletions.
+    lastRow = adjustSheet.Cells(adjustSheet.Rows.Count, "A").End(xlUp).Row
+
+    ' Add new visible sheet names that are not already in the "Adjustment Table".
+    For Each wsName In visibleSheets
+        If Not dictAdjustment.exists(wsName) Then
+            lastRow = lastRow + 1
+            adjustSheet.Cells(lastRow, "A").Value = wsName
+        End If
+    Next wsName
+End Sub
+
+Private Sub btnRandomSelectBins_Click()
+    Dim wsLog As Worksheet
+    Dim lastLogRow As Long
+    Dim binToCheck As String
+    Dim binCount As Long
+    Dim validBins() As String
+    Dim selectedBins As Collection
+    Dim recentBins As Object  ' Using Dictionary for fast lookup
+    Dim i As Long, j As Long
+    Dim tempIndex As Long
+    Dim tempBin As String
+    Dim logDate As Date
+    Dim existingBin As String
+    Dim dictSelected As Object
+    Dim binArraySize As Long
+    Dim binFound As Boolean
+
+    ' Set worksheet reference
+    Set wsLog = ThisWorkbook.Sheets("Random Cycle Count Log")
+    Set selectedBins = New Collection
+    Set recentBins = CreateObject("Scripting.Dictionary")
+    Set dictSelected = CreateObject("Scripting.Dictionary")
+    
+    ' Ask how many bins to select
+    Dim inputVal As Variant
+    inputVal = InputBox("Enter the number of bins to select:", "Select Bins")
+    If inputVal = "" Then Exit Sub
+    If Not IsNumeric(inputVal) Or Val(inputVal) <= 0 Then
+        MsgBox "Please enter a valid number for the bin count.", vbExclamation
+        Exit Sub
+    End If
+    binCount = Val(inputVal)
+    
+    ' Build a list of recent bins from the log (last 90 days)
+    lastLogRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row
+    For i = 2 To lastLogRow
+        existingBin = Trim(wsLog.Cells(i, 1).Value)
+        If existingBin <> "" Then
+            logDate = wsLog.Cells(i, 2).Value
+            If IsDate(logDate) And logDate >= Date - 90 Then
+                If Not recentBins.exists(existingBin) Then
+                    recentBins.Add existingBin, True
+                End If
+            End If
+        End If
+    Next i
+    
+    ' Build a list of valid bins (AA–AH, not recently used)
+    binArraySize = -1
+    ReDim validBins(0 To 0)
+    For i = 0 To lstboxBins.ListCount - 1
+        binToCheck = Trim(lstboxBins.List(i, 0))
+        If binToCheck <> "" And _
+           (binToCheck Like "AA*" Or binToCheck Like "AB*" Or binToCheck Like "AC*" Or _
+            binToCheck Like "AD*" Or binToCheck Like "AE*" Or binToCheck Like "AF*" Or _
+            binToCheck Like "AG*" Or binToCheck Like "AH*") Then
+            ' Check if bin has NOT been used recently:
+            If Not recentBins.exists(binToCheck) Then
+                binArraySize = binArraySize + 1
+                If binArraySize = 0 Then
+                    validBins(0) = binToCheck
+                Else
+                    ReDim Preserve validBins(0 To binArraySize)
+                    validBins(binArraySize) = binToCheck
+                End If
+            End If
+        End If
+    Next i
+    
+    ' Check if enough valid bins are available
+    If binArraySize + 1 < binCount Then
+        MsgBox "Only " & (binArraySize + 1) & " valid bins available. Cannot select " & binCount & ".", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Shuffle valid bins using the Fisher-Yates algorithm
+    Dim randIndexes() As Long
+    ReDim randIndexes(0 To binArraySize)
+    For i = 0 To binArraySize
+        randIndexes(i) = i
+    Next i
+    For i = binArraySize To 1 Step -1
+        j = Int(Rnd() * (i + 1))
+        tempIndex = randIndexes(i)
+        randIndexes(i) = randIndexes(j)
+        randIndexes(j) = tempIndex
+    Next i
+    
+    ' Select bins from the shuffled list, ensuring uniqueness
+    For i = 0 To binCount - 1
+        tempBin = validBins(randIndexes(i))
+        If Not dictSelected.exists(tempBin) Then
+            selectedBins.Add tempBin
+            dictSelected.Add tempBin, 1
+        End If
+    Next i
+    
+    ' Clear and populate the listbox with the selected bins
+    lstboxCycle.Clear
+    For i = 1 To selectedBins.Count
+        lstboxCycle.AddItem selectedBins(i)
+    Next i
+    
+    ' Log the selected bins: update an existing entry if within 90 days; otherwise, add a new entry.
+    lastLogRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row
+    For i = 1 To selectedBins.Count
+        binFound = False
+        tempBin = selectedBins(i)
+        ' Search for an existing log entry starting at row 2.
+        For j = 2 To lastLogRow
+            existingBin = Trim(wsLog.Cells(j, 1).Value)
+            If existingBin = tempBin Then
+                logDate = wsLog.Cells(j, 2).Value
+                If IsDate(logDate) And logDate < Date - 90 Then
+                    wsLog.Cells(j, 2).Value = Date
+                End If
+                binFound = True
+                Exit For
+            End If
+        Next j
+        
+        ' If the bin was not found in the current log, add a new entry.
+        If Not binFound Then
+            lastLogRow = lastLogRow + 1
+            wsLog.Cells(lastLogRow, 1).Value = tempBin
+            wsLog.Cells(lastLogRow, 2).Value = Date
+        End If
+    Next i
+    
+    ' Update summary text boxes: txt90Day counts unique bins logged in the last 90 days;
+    ' txtComplete shows the completion percentage.
+    Dim unique90 As Object
+    Set unique90 = CreateObject("Scripting.Dictionary")
+    lastLogRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row
+    For i = 2 To lastLogRow
+        existingBin = Trim(wsLog.Cells(i, 1).Value)
+        logDate = wsLog.Cells(i, 2).Value
+        If existingBin <> "" And IsDate(logDate) And logDate >= Date - 90 Then
+            If Not unique90.exists(existingBin) Then
+                unique90.Add existingBin, 1
+            End If
+        End If
+    Next i
+
+    txt90Day.Value = unique90.Count
+    If Val(txtTotalBins.Value) > 0 Then
+        txtComplete.Value = Format((Val(txt90Day.Value) / Val(txtTotalBins.Value)) * 100, "0.0") & "%"
+    Else
+        txtComplete.Value = "0%"
+    End If
+
+    MsgBox "Selection complete. " & selectedBins.Count & " bins selected and logged.", vbInformation, "Done"
+End Sub
+
+Private Sub UpdateTxt90DayCount()
+    Dim wsLog As Worksheet
+    Dim lastLogRow As Long
+    Dim binVal As String
+    Dim uniqueBins As Object
+    Dim i As Long
+    
+    ' Assign worksheet reference
+    Set wsLog = ThisWorkbook.Sheets("Random Cycle Count Log")
+    Set uniqueBins = CreateObject("Scripting.Dictionary")
+    
+    ' Get the last used row in the log
+    lastLogRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row
+    
+    ' Loop through the data and add unique bins to the dictionary
+    For i = 2 To lastLogRow ' Start from row 2, assuming row 1 has headers
+        binVal = Trim(wsLog.Cells(i, 1).Value)
+        
+        ' Only add non-empty bins to the dictionary (unique bins)
+        If binVal <> "" Then
+            If Not uniqueBins.exists(binVal) Then
+                uniqueBins.Add key:=binVal, item:=True
+            End If
+        End If
+    Next i
+    
+    ' Update txt90Day with the count of unique bins
+    txt90Day.Value = uniqueBins.Count
+End Sub
+
+Public Sub PopulateListBox(searchText As String)
+    Dim wsItems As Worksheet
+    Dim dictBins As Object
+    Dim lastRow As Long
+    Dim binVal As String, itemVal As String
+    Dim cell As Range
+    Dim ignoredBins As Object
+    Dim binToIgnore As Variant
+    Dim rowIndex As Long
+    Dim key As Variant
+
+    ' Set the worksheet containing the data
+    Set wsItems = ThisWorkbook.Sheets("Items")
+    
+    ' Find the last used row in Column A (which holds the bin values)
+    lastRow = wsItems.Cells(wsItems.Rows.Count, 1).End(xlUp).Row
+    
+    ' Initialize dictionaries:
+    '   dictBins will group bins and capture the count of unique items under each bin.
+    '   ignoredBins will contain all bins that should be skipped.
+    Set dictBins = CreateObject("Scripting.Dictionary")
+    Set ignoredBins = CreateObject("Scripting.Dictionary")
+    
+    ' Add bins to ignore (case-sensitive matches)
+    For Each binToIgnore In Array("TEMPE DEMO", "RCB1", "RCB2", "RCB3", "RCB4", _
+                                  "RCA", "RCA1", "RCA2", "RCA3", "RCA4", "RCACCT", _
+                                  "CHK TABLE", "SALESREP", "VAS", "WILL CALL", "TRUCK", _
+                                  "WIP-1", "WIP-@", "WIP-3", "WIP-4", "WIP-5", "WIP-6", _
+                                  "HVAC", "UPS", "LTL", "PERF ITEMS")
+        ignoredBins.Add binToIgnore, 1
+    Next binToIgnore
+    
+    ' Loop through the data in Column A (bins) and Column B (items)
+    For Each cell In wsItems.Range("A2:A" & lastRow)
+        binVal = Trim(CStr(cell.Value))
+        itemVal = Trim(CStr(wsItems.Cells(cell.Row, 2).Value))
+        
+        ' Only process non-empty bin and item values
+        If binVal <> "" And itemVal <> "" Then
+            ' Only include bins whose first two letters fall between "AA" and "AH"
+            If UCase(Left(binVal, 2)) >= "AA" And UCase(Left(binVal, 2)) <= "AH" Then
+                ' Skip bins that are in the ignore list
+                If Not ignoredBins.exists(binVal) Then
+                    ' If the bin is not already in dictBins, initialize its nested dictionary
+                    If Not dictBins.exists(binVal) Then
+                        Set dictBins(binVal) = CreateObject("Scripting.Dictionary")
+                    End If
+                    ' Add the item to the nested dictionary if it isn't already present
+                    If Not dictBins(binVal).exists(itemVal) Then
+                        dictBins(binVal).Add itemVal, 1
+                    End If
+                End If
+            End If
+        End If
+    Next cell
+    
+    ' Update txtTotalBins with the count of valid bins
+    txtTotalBins.Value = dictBins.Count
+    
+    ' Configure the ListBox
+    With lstboxBins
+        .Clear
+        .ColumnCount = 2
+        .ColumnWidths = "100;100"
+    End With
+    
+    ' Populate the ListBox with valid bins that match the search text
+    rowIndex = 0
+    For Each key In dictBins.Keys
+        If Trim(CStr(key)) <> "" Then
+            If searchText = "" Or InStr(1, key, searchText, vbTextCompare) > 0 Then
+                lstboxBins.AddItem
+                lstboxBins.List(rowIndex, 0) = key
+                lstboxBins.List(rowIndex, 1) = dictBins(key).Count
+                rowIndex = rowIndex + 1
+            End If
+        End If
+    Next key
+End Sub
+
+Private Sub cmdDiscrepancy_Click()
+    Dim ws As Worksheet
+    Dim sheetName As String
+    Dim originalAutoFilter As Boolean
+    Dim colFVisible As Boolean, colGVisible As Boolean
+    Dim userCancelled As Boolean
+    Dim verificationUser As String
+    Dim userInputV As String
+    Dim userChoice As Integer
+    Dim userListStr As String
+
+    ' Check if a sheet is selected in lstboxSheets
+    If lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list first.", vbExclamation, "No Selection"
+        Exit Sub
+    End If
+
+    sheetName = lstboxSheets.Value
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "The selected sheet could not be found.", vbCritical, "Error"
+        Exit Sub
+    End If
+
+    ' Prompt for the Verification Counter before proceeding.
+    userListStr = "1) Ken Lahvic" & vbCrLf & _
+                  "2) Scott Frazier" & vbCrLf & _
+                  "3) Trever Oelschlaeger" & vbCrLf & _
+                  "4) Blake Arlowe" & vbCrLf & _
+                  "5) Aaron Rivera" & vbCrLf & _
+                  "6) Chris Lynch"
+                  
+    userInputV = InputBox("Select Verification Counter by entering a number (1-6):" & vbCrLf & vbCrLf & userListStr, "Assign Verification Counter")
+    
+    If userInputV = "" Or Not IsNumeric(userInputV) Then
+        MsgBox "Invalid selection for Verification Counter. Process cancelled.", vbExclamation
+        Exit Sub
+    End If
+    
+    userChoice = CInt(userInputV)
+    If userChoice < 1 Or userChoice > 6 Then
+        MsgBox "Please enter a number between 1 and 6.", vbExclamation
+        Exit Sub
+    End If
+    
+    Select Case userChoice
+        Case 1: verificationUser = "Ken Lahvic"
+        Case 2: verificationUser = "Scott Frazier"
+        Case 3: verificationUser = "Trever Oelschlaeger"
+        Case 4: verificationUser = "Blake Arlowe"
+        Case 5: verificationUser = "Aaron Rivera"
+        Case 6: verificationUser = "Chris Lynch"
+    End Select
+
+    ' Update the worksheet header cell (assumed to be the merged cell A1)
+    ' This appends the Verification Counter to the existing header content.
+    ws.Range("A1").Value = ws.Range("A1").Value & " | Verification Counter: " & verificationUser
+
+    ' Hide the userform and disable screen updating & print communication for performance.
+    Me.Hide
+    Application.ScreenUpdating = False
+    Application.PrintCommunication = False
+
+    ' Save current visibility states of Columns F and G.
+    colFVisible = Not ws.Columns("F").Hidden
+    colGVisible = Not ws.Columns("G").Hidden
+
+    ' Save the current AutoFilter state.
+    originalAutoFilter = ws.AutoFilterMode
+
+    With ws
+        ' Insert temporary header in H2.
+        .Range("H2").Value = "Confirmed Count"
+        
+        ' Copy formatting from Column F to Column H.
+        .Columns("F").Copy
+        .Columns("H").PasteSpecial Paste:=xlPasteFormats
+        Application.CutCopyMode = False
+        
+        ' Ensure AutoFilter is on and filter Column F (Field 6) to show only nonzero discrepancies.
+        If Not .AutoFilterMode Then .Range("A1").AutoFilter
+        .Range("A1").AutoFilter Field:=6, Criteria1:="<>0"
+        
+        ' Hide Columns F and G for the print preview.
+        .Columns("F").Hidden = True
+        .Columns("G").Hidden = True
+    End With
+
+    ' Set up print settings.
+    With ws.PageSetup
+        .Orientation = xlPortrait
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+        .CenterHorizontally = True
+        .CenterVertically = True
+        .PrintGridlines = True
+        .PrintTitleRows = "$1:$2"
+        .LeftHeader = ""
+        .CenterHeader = "&""Calibri,Bold""&14 " & sheetName & " - Discrepancy Report | Verification Counter: " & verificationUser
+        .RightHeader = ""
+    End With
+
+    Application.PrintCommunication = True
+
+    ' Show print preview. Set userCancelled flag if an error occurs (indicating cancellation).
+    On Error Resume Next
+    ws.PrintPreview
+    If Err.Number <> 0 Then userCancelled = True
+    On Error GoTo 0
+
+    ' Restore the filter state.
+    With ws
+        If Not originalAutoFilter Then
+            .AutoFilterMode = False
+        ElseIf .FilterMode Then
+            .ShowAllData
+        End If
+        
+        ' Clean up temporary header and formatting.
+        .Range("H2").ClearContents
+        .Columns("H").ClearFormats
+        
+        ' Restore original visibility for Columns F and G.
+        .Columns("F").Hidden = Not colFVisible
+        .Columns("G").Hidden = Not colGVisible
+    End With
+
+    Application.ScreenUpdating = True
+
+    If Not userCancelled Then
+        MsgBox "Discrepancy report preview complete for '" & sheetName & "'.", vbInformation, "Preview Complete"
+    End If
+
+    Me.Show
+End Sub
+
+Private Sub cmdEmail_Click()
+    Dim ws As Worksheet
+    Dim sheetName As String
+    Dim filePath As String
+    Dim OutlookApp As Object
+    Dim OutlookMail As Object
+    
+    ' Check if a sheet is selected in the list box.
+    If Me.lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list first.", vbExclamation, "No Selection"
+        Exit Sub
+    End If
+    
+    ' Get the selected sheet name and worksheet object.
+    sheetName = Me.lstboxSheets.Value
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "The selected sheet could not be found.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    ' Define the file path in the Temp folder.
+    filePath = Environ("TEMP") & "\" & sheetName & ".pdf"
+    
+    ' Export the worksheet as a PDF.
+    On Error Resume Next
+    ws.ExportAsFixedFormat Type:=xlTypePDF, Filename:=filePath, Quality:=xlQualityStandard, _
+                           IncludeDocProperties:=True, IgnorePrintAreas:=False, OpenAfterPublish:=False
+    On Error GoTo 0
+    If Dir(filePath) = "" Then
+        MsgBox "Failed to create PDF file.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    ' Attempt to get an existing instance of Outlook.
+    Set OutlookApp = Nothing
+    On Error Resume Next
+    Set OutlookApp = GetObject(, "Outlook.Application")
+    On Error GoTo 0
+    If OutlookApp Is Nothing Then
+        MsgBox "Outlook is not running." & vbCrLf & _
+               "Please open Outlook and try again.", vbExclamation, "Outlook Not Running"
+        Exit Sub
+    End If
+    
+    ' Create a new email item.
+    Set OutlookMail = OutlookApp.CreateItem(0)
+    With OutlookMail
+        .To = "jill.pasquali@iecsupply.com"            ' Default recipient (adjust if needed)
+        .BCC = "ken.lahvic@iecsupply.com"                ' Default BCC recipient (adjust if needed)
+        .Subject = "Cycle Count Complete - Attached: " & sheetName & " Report"
+        .Body = "Hi Jill," & vbNewLine & vbNewLine & _
+                "Cycle counts have been completed for the above-referenced bins. " & _
+                "I have attached to this email the cycle count sheets; discrepancies are highlighted in yellow for your convenience." & vbNewLine & vbNewLine & _
+                "Please let me know when adjustments have been made, or if you have additional questions." & vbNewLine & vbNewLine & _
+                "Please find the attached report for " & sheetName & "."
+        .Attachments.Add filePath
+        .Display  ' Displays the email draft for review (you can change to .Send for automatic sending)
+    End With
+    
+    ' Notify the user.
+    MsgBox "Draft email created with PDF attached." & vbCrLf & _
+           "Please review and click Send in Outlook.", vbInformation, "Email Ready"
+    
+    ' Cleanup.
+    Set OutlookMail = Nothing
+    Set OutlookApp = Nothing
+End Sub
+
+Private Sub cmdOpenFormUpd_Click()
+frmSheetUpdate.Show
+End Sub
+
+' Print Cycle Count Worksheet
+Private Sub cmdPrint_Click()
+    Dim ws As Worksheet
+    Dim sheetName As String
+    Dim colFVisible As Boolean, colGVisible As Boolean
+    Dim userCancelled As Boolean
+    
+    ' Ensure a sheet is selected in the list box.
+    If lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list first.", vbExclamation, "No Selection"
+        Exit Sub
+    End If
+    
+    ' Fetch the selected sheet name.
+    sheetName = lstboxSheets.Value
+    
+    ' Attempt to retrieve the worksheet.
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    If ws Is Nothing Then
+        MsgBox "The selected sheet could not be found.", vbCritical, "Error"
+        Exit Sub
+    End If
+    On Error GoTo 0
+    
+    ' Hide the form to improve visibility during print preview.
+    Me.Hide
+    
+    Application.ScreenUpdating = False
+    Application.PrintCommunication = False
+    
+    ' Save the current visibility state of Columns F and G.
+    colFVisible = Not ws.Columns("F").EntireColumn.Hidden
+    colGVisible = Not ws.Columns("G").EntireColumn.Hidden
+    
+    ' Hide Columns F and G.
+    ws.Columns("F").EntireColumn.Hidden = True
+    ws.Columns("G").EntireColumn.Hidden = True
+    
+    ' Configure print settings.
+    With ws.PageSetup
+        .Orientation = xlPortrait
+        .Zoom = False                   ' Disable Zoom for FitToPages.
+        .FitToPagesWide = 1             ' Fit content to one page wide.
+        .FitToPagesTall = False         ' Allow height to adjust automatically.
+        .CenterHorizontally = True      ' Center content horizontally.
+        .CenterVertically = True        ' Center content vertically.
+        .PrintGridlines = True          ' Print gridlines (optional).
+        .PrintTitleRows = "$1:$2"       ' Repeat header rows on each page.
+    End With
+    
+    Application.PrintCommunication = True
+    
+    ' Show the print preview.
+    On Error Resume Next
+    ws.PrintPreview
+    userCancelled = (Err.Number <> 0)
+    On Error GoTo 0
+    
+    ' Restore Columns F and G visibility.
+    ws.Columns("F").EntireColumn.Hidden = Not colFVisible
+    ws.Columns("G").EntireColumn.Hidden = Not colGVisible
+    
+    Application.ScreenUpdating = True
+    
+    ' Only report completion if the preview was not canceled.
+    If Not userCancelled Then
+        MsgBox "Print preview complete for sheet '" & sheetName & "'." & _
+            IIf(colFVisible Or colGVisible, " Column visibility restored.", ""), _
+            vbInformation, "Preview Complete"
+    End If
+    
+    ' Show the form again.
+    Me.Show
+End Sub
+
+Private Sub cmdSavePDF_Click()
+    Dim ws As Worksheet
+    Dim sheetName As String
+    Dim savePath As String
+    Dim filePath As String
+    
+    ' Check if a sheet is selected from the list box.
+    If Me.lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list first.", vbExclamation, "No Selection"
+        Exit Sub
+    End If
+    
+    ' Get the selected sheet name.
+    sheetName = Me.lstboxSheets.Value
+    
+    ' Attempt to get the worksheet object.
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "The selected sheet could not be found.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    ' Define the custom save path.
+    ' Update this path to point to your desired folder.
+    savePath = "G:\Cycle Counts\2025"
+    ' Ensure the path ends with a backslash.
+    If Right(savePath, 1) <> "\" Then savePath = savePath & "\"
+    
+    ' Construct the full file path including file name.
+    filePath = savePath & sheetName & ".pdf"
+    
+    ' Attempt to export the sheet as a PDF.
+    On Error Resume Next
+    ws.ExportAsFixedFormat Type:=xlTypePDF, Filename:=filePath, Quality:=xlQualityStandard, _
+                           IncludeDocProperties:=True, IgnorePrintAreas:=False, OpenAfterPublish:=False
+    On Error GoTo 0
+    
+    ' Verify that the PDF file was created.
+    If Dir(filePath) = "" Then
+        MsgBox "Failed to save PDF file.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    ' Notify the user of success.
+    MsgBox "PDF saved successfully to:" & vbCrLf & filePath, vbInformation, "Success"
+    
+    ' Clean up.
+    Set ws = Nothing
+End Sub
+
+Private Sub cmdViewSheet_Click()
+
+    Dim frm As Object
+    Dim wsName As String
+    Dim ws As Worksheet
+
+    ' Make sure something is selected
+    If lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the selected sheet name
+    wsName = lstboxSheets.Value
+
+    ' Close all open UserForms
+    For Each frm In VBA.UserForms
+        Unload frm
+    Next frm
+
+    ' Activate the selected worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(wsName)
+    On Error GoTo 0
+
+    If Not ws Is Nothing Then
+        ws.Activate
+    Else
+        MsgBox "The selected sheet could not be found.", vbCritical
+    End If
+
+End Sub
+
+' Event: Filter ListBox as User Types in txtSearch
+Private Sub txtSearch_Change()
+    Call PopulateListBox(txtSearch.Text)
+End Sub
+
+Private Sub btnRefreshItems_Click()
+    On Error GoTo RefreshError
+
+    ' Refresh data on "Items" without activating it
+    Dim wsItems As Worksheet
+    Set wsItems = ThisWorkbook.Sheets("Items")
+
+    ' Refresh only that sheet’s queries (if any)
+    Dim qt As QueryTable
+    For Each qt In wsItems.QueryTables
+        qt.Refresh BackgroundQuery:=False
+    Next qt
+
+    Dim lo As ListObject
+    For Each lo In wsItems.ListObjects
+        If lo.QueryTable Is Nothing Then
+            lo.Refresh ' just in case
+        Else
+            lo.QueryTable.Refresh BackgroundQuery:=False
+        End If
+    Next lo
+
+    ' Optionally: Refresh connections too (if needed)
+    ThisWorkbook.RefreshAll
+
+    ' Wait 5 seconds, then call RefreshListBoxBins
+    Application.OnTime Now + TimeValue("00:00:05"), "RefreshListBoxBins"
+
+    ' Pop message when done
+    MsgBox "Data refresh complete for 'Items' sheet.", vbInformation, "Refresh Status"
+    Exit Sub
+
+RefreshError:
+    MsgBox "An error occurred during the refresh process: " & Err.description, vbCritical, "Refresh Error"
+End Sub
+
+
+Private Sub txtSrch1_Change()
+    Call FilterSheetList(txtSrch1.Text)
+End Sub
+
+Private Sub UserForm_Initialize()
+    Dim scrWidth As Long, scrHeight As Long
+    Dim scrWidthTwips As Long, scrHeightTwips As Long
+    Dim ws As Worksheet
+    Dim lstBox As Object
+
+    ' Retrieve screen dimensions in pixels using API calls.
+    scrWidth = GetSystemMetrics(SM_CXSCREEN)
+    scrHeight = GetSystemMetrics(SM_CYSCREEN)
+    
+    ' Convert these dimensions to twips (approx. 15 twips per pixel at 96 DPI).
+    scrWidthTwips = scrWidth * 15
+    scrHeightTwips = scrHeight * 15
+    
+    ' Define the desired size of your UserForm in twips.
+    Me.Width = 558        ' Desired width in twips
+    Me.Height = 455.25    ' Desired height in twips
+    
+    ' Center the UserForm on the screen.
+    Me.Left = (scrWidthTwips - Me.Width) / 2
+    Me.Top = (scrHeightTwips - Me.Height) / 2
+
+    '-----------------------------------------------------------
+    ' Continue with the existing setup below.
+    '-----------------------------------------------------------
+    
+    ' Set and clear the list box for sheets.
+    Set lstBox = Me.lstboxSheets
+    lstBox.Clear
+    
+    ' Populate the list box with names of all visible worksheets.
+    For Each ws In ThisWorkbook.Sheets
+        If ws.Visible = xlSheetVisible Then
+            lstBox.AddItem ws.Name
+        End If
+    Next ws
+
+    ' Call additional routines to populate list boxes.
+    Call PopulateSheetsList
+    PopulateListBox ""
+    
+    ' Count unique bins from the "Random Cycle Count Log" for the last 90 days.
+    Dim wsLog As Worksheet
+    Dim logRow As Long
+    Dim logDate As Date
+    Dim recentCutoff As Date
+    Dim binID As String
+    Dim recentBins As Collection
+
+    Set wsLog = ThisWorkbook.Sheets("Random Cycle Count Log")
+    Set recentBins = New Collection
+    recentCutoff = Date - 90
+
+    ' Loop through the log rows (starting at row 2 to skip header) and add bins that are within the last 90 days.
+    On Error Resume Next  ' Suppress errors if a duplicate key is encountered.
+    For logRow = 2 To wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row
+        logDate = wsLog.Cells(logRow, 2).Value
+        If IsDate(logDate) And logDate >= recentCutoff Then
+            binID = wsLog.Cells(logRow, 1).Value
+            If binID <> "" Then
+                recentBins.Add binID, CStr(binID)
+            End If
+        End If
+    Next logRow
+    On Error GoTo 0
+
+    ' Update the txt90Day control with the count of unique recent bins.
+    Me.txt90Day.Value = recentBins.Count
+
+    ' Calculate the completion percentage.
+    Dim totalBins As Double, countedBins As Double, percentComplete As Double
+    totalBins = Val(Me.txtTotalBins.Value)
+    countedBins = Val(Me.txt90Day.Value)
+
+    If totalBins > 0 Then
+        percentComplete = countedBins / totalBins
+        Me.txtComplete.Value = Format(percentComplete, "0.0%")
+    Else
+        Me.txtComplete.Value = "N/A"
+    End If
+
+    ' Optionally, call UpdateAccuracy if defined.
+    ' Call UpdateAccuracy
+End Sub
+
+Private Sub FilterSheetList(searchText As String)
+    Dim adjustSheet As Worksheet
+    Dim cell As Range
+    Dim lastRow As Long
+    Dim sheetName As String
+
+    Set adjustSheet = ThisWorkbook.Sheets("Adjustment Table")
+    lstboxSheets.Clear
+
+    lastRow = adjustSheet.Cells(adjustSheet.Rows.Count, "A").End(xlUp).Row
+
+    For Each cell In adjustSheet.Range("A1:A" & lastRow)
+        sheetName = Trim(cell.Value)
+        If sheetName <> "" Then
+            If searchText = "" Or InStr(1, sheetName, searchText, vbTextCompare) > 0 Then
+                lstboxSheets.AddItem sheetName
+            End If
+        End If
+    Next cell
+End Sub
+
+Sub UpdateAccuracy()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim totalParts As Long
+    Dim partsWithDiscrepancy As Long
+    Dim accuracyPercent As Double
+    Dim i As Long
+    Dim countDate As Variant
+    Dim firstDateFound As Boolean
+
+    ' Reference the worksheet where the last count data is stored.
+    Set ws = ThisWorkbook.Sheets("Last Count Dates")
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    totalParts = 0
+    partsWithDiscrepancy = 0
+    firstDateFound = False
+
+    ' === Clear any previous highlights in columns A to E ===
+    With ws.Range("A2:E" & lastRow)
+        .Interior.ColorIndex = xlNone
+    End With
+
+    ' === Loop through each record, starting at row 2 (assuming headers in row 1) ===
+    For i = 2 To lastRow
+        ' Proceed only if the record has a value in column A.
+        If ws.Cells(i, "A").Value <> "" Then
+            countDate = ws.Cells(i, "C").Value
+            If IsDate(countDate) Then
+                totalParts = totalParts + 1
+                ' Count as a discrepancy if the value in column D is not empty and not 0.
+                If Trim(ws.Cells(i, "D").Value & "") <> "" And ws.Cells(i, "D").Value <> 0 Then
+                    partsWithDiscrepancy = partsWithDiscrepancy + 1
+                End If
+                firstDateFound = True
+
+                ' Highlight columns A to E for the current row.
+                ws.Range(ws.Cells(i, "A"), ws.Cells(i, "E")).Interior.Color = RGB(220, 230, 241)
+            End If
+        End If
+    Next i
+
+    ' Debug outputs (optional, remove if not needed)
+    Debug.Print "Total Parts: " & totalParts
+    Debug.Print "Parts with Discrepancy: " & partsWithDiscrepancy
+
+    ' Calculate the accuracy percentage: parts without discrepancy vs. total parts.
+    If totalParts > 0 Then
+        accuracyPercent = ((totalParts - partsWithDiscrepancy) / totalParts) * 100
+    Else
+        accuracyPercent = 0
+    End If
+
+    Debug.Print "Accuracy Percentage: " & accuracyPercent
+
+    ' Update the text box with the formatted accuracy percentage.
+    Me.txtAccuracy.Value = Format(accuracyPercent, "0.00") & "%"
+
+    ' Set the back color of the txtAccuracy control based on the accuracy level.
+    Select Case accuracyPercent
+        Case Is >= 90
+            Me.txtAccuracy.BackColor = RGB(0, 176, 80)   ' Green
+        Case 75 To 89.99
+            Me.txtAccuracy.BackColor = RGB(255, 192, 0)  ' Yellow
+        Case Else
+            Me.txtAccuracy.BackColor = RGB(255, 0, 0)      ' Red
+    End Select
+
+    ' Update the range text box:
+    ' If at least one valid count date is found, we assume "All Time" is the date range.
+    If firstDateFound Then
+        Me.txtRange.Value = "All Time"
+    Else
+        Me.txtRange.Value = "No counts found"
+    End If
+End Sub
