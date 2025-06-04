@@ -1,0 +1,557 @@
+Private Sub UserForm_Activate()
+    On Error Resume Next
+    
+    ' Refresh all worksheet data connections
+    Dim ws As Worksheet
+    For Each ws In ThisWorkbook.Worksheets
+        ws.ListObjects.RefreshAll
+    Next ws
+    
+    ' Refresh all workbook connections
+    ThisWorkbook.RefreshAll
+    
+    On Error GoTo 0
+End Sub
+
+Private Sub cmdClear_Click()
+    Dim ctrl As Control
+    
+    ' Loop through all controls on the form
+    For Each ctrl In Me.Controls
+        ' Check if the control is a TextBox
+        If TypeOf ctrl Is MSForms.TextBox Then
+            ctrl.Value = "" ' Clear the value of the TextBox
+        End If
+    Next ctrl
+End Sub
+
+Private Sub cmdClose_Click()
+    Unload Me ' This will close the current UserForm
+End Sub
+
+Private Sub cmdRefresh_Click()
+    ExtractDataToLastCountDates
+End Sub
+
+' Function to extract the date from a string in A1
+Function ExtractDateFromCell(cellValue As String) As Variant
+    Dim regex As Object
+    Dim matches As Object
+    Dim extractedDate As String
+    
+    ' Create a regex object
+    Set regex = CreateObject("VBScript.RegExp")
+    
+    ' Regular expression to match date formats (e.g., "March 31, 2025")
+    regex.Pattern = "([A-Za-z]+ \d{1,2}, \d{4})"
+    regex.Global = False
+    regex.IgnoreCase = True
+    
+    ' Find matches
+    If regex.Test(cellValue) Then
+        Set matches = regex.Execute(cellValue)
+        extractedDate = matches(0).Value
+        ExtractDateFromCell = CDate(extractedDate) ' Convert to date format
+    Else
+        ExtractDateFromCell = Null ' No valid date found
+    End If
+End Function
+
+Public Sub ExtractDataToLastCountDates()
+    Dim ws As Worksheet, wsSource As Worksheet
+    Dim targetSheet As Worksheet, itemsSheet As Worksheet
+    Dim lastTargetRow As Long, wsRowCount As Long
+    Dim itemsLastRow As Long, targetLastRow As Long, lastRowSrc As Long
+    Dim data As Variant, itemsData As Variant
+    Dim lastCountDate As Variant
+    Dim i As Long, j As Long
+    Dim targetItem As String, binValue As String
+    Dim discrepancy As Double, discCost As Double, totalCost As Double
+    
+    ' Set worksheets
+    Set targetSheet = ThisWorkbook.Sheets("Last Count Dates")
+    Set itemsSheet = ThisWorkbook.Sheets("Items")
+    
+    ' --- Debug: Start Process ---
+    Debug.Print "Starting Data Extraction"
+    
+    ' --- Refresh "Items" data connections ---
+    Dim conn As WorkbookConnection
+    For Each conn In ThisWorkbook.Connections
+        If InStr(1, conn.Name, "Items", vbTextCompare) > 0 Then
+            Debug.Print "Refreshing connection:", conn.Name
+            conn.Refresh
+        End If
+    Next conn
+    Application.Wait (Now + TimeValue("0:00:05"))
+
+    ' --- Clear existing data in "Last Count Dates" ---
+    lastTargetRow = targetSheet.Cells(targetSheet.Rows.Count, 1).End(xlUp).Row
+    If lastTargetRow > 1 Then
+        Debug.Print "Clearing old data in Last Count Dates"
+        targetSheet.Range("A2:J" & lastTargetRow).ClearContents
+    End If
+    lastTargetRow = 2
+    
+    ' --- Extract data from all sheets except "Last Count Dates" and "Items" ---
+    For Each ws In ThisWorkbook.Sheets
+        Debug.Print "Processing Sheet:", ws.Name  ' Check which sheets are processed
+        
+        If ws.Name <> "Last Count Dates" And ws.Name <> "Items" Then
+            lastCountDate = ExtractDateFromCell(ws.Cells(1, 1).Value)
+            
+            Debug.Print "Sheet:", ws.Name, "Last Count Date:", lastCountDate
+            
+            If IsNull(lastCountDate) Then
+                Debug.Print "Skipping Sheet:", ws.Name, "due to Null last count date"
+                GoTo NextSheetLoop
+            End If
+            
+            wsRowCount = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row ' last row in Column B
+            Debug.Print "Sheet:", ws.Name, "Row Count:", wsRowCount
+            
+            If wsRowCount > 2 Then
+                For i = 3 To wsRowCount
+                    targetSheet.Cells(lastTargetRow, 1).Value = "'" & ws.Cells(i, 2).Text
+                    targetSheet.Cells(lastTargetRow, 2).Value = ws.Cells(i, 3).Value
+                    targetSheet.Cells(lastTargetRow, 3).Value = Format(lastCountDate, "MM/DD/YYYY")
+                    targetSheet.Cells(lastTargetRow, 4).Value = ws.Cells(i, 6).Value
+                    targetSheet.Cells(lastTargetRow, 5).Value = ws.Name
+                    lastTargetRow = lastTargetRow + 1
+                Next i
+            Else
+                Debug.Print "Skipping Sheet:", ws.Name, "due to insufficient rows"
+            End If
+        End If
+NextSheetLoop:
+Debug.Print "Final Target Row:", lastTargetRow
+
+    Next ws
+    
+    Debug.Print "Data Extraction Completed. Preparing Formatting and Calculations..."
+    
+    ' Format Column A as Text
+    targetSheet.Range("A2:A" & lastTargetRow - 1).NumberFormat = "@"
+    
+    ' Load "Items" data for MAC lookup
+    itemsLastRow = itemsSheet.Cells(itemsSheet.Rows.Count, 2).End(xlUp).Row
+    If itemsLastRow < 2 Then
+        MsgBox "No data found in the Items sheet!", vbExclamation
+        Exit Sub
+    End If
+    itemsData = itemsSheet.Range("B2:I" & itemsLastRow).Value
+    
+    ' Load "Last Count Dates" data
+    targetLastRow = targetSheet.Cells(targetSheet.Rows.Count, 1).End(xlUp).Row
+    If targetLastRow < 2 Then
+        MsgBox "No data found in Last Count Dates sheet!", vbExclamation
+        Exit Sub
+    End If
+    data = targetSheet.Range("A2:J" & targetLastRow).Value
+    
+    ' Process each row for MAC Lookup and Total Cost Calculation
+    For i = LBound(data, 1) To UBound(data, 1)
+        targetItem = Trim(CStr(data(i, 1)))
+        discrepancy = data(i, 4)
+        
+        data(i, 6) = "Not Found"
+        If targetItem <> "" Then
+            For j = LBound(itemsData, 1) To UBound(itemsData, 1)
+                If Trim(CStr(itemsData(j, 1))) = targetItem Then
+                    If IsNumeric(itemsData(j, 8)) Then
+                        data(i, 6) = CDbl(itemsData(j, 8))
+                    End If
+                    Exit For
+                End If
+            Next j
+        End If
+        
+        ' Calculate Total Cost
+        If IsNumeric(data(i, 6)) Then
+            discCost = CDbl(data(i, 6))
+            totalCost = discrepancy * discCost
+            data(i, 8) = totalCost
+        Else
+            data(i, 8) = "N/A"
+        End If
+    Next i
+    
+    ' Write back to "Last Count Dates"
+    targetSheet.Range("A2:J" & targetLastRow).Value = data
+    targetSheet.Columns("A:J").AutoFit
+    
+    ' --- Apply Green and White Formatting ---
+    Dim rowIndex As Long
+    Dim formatRange As Range
+    
+    ' Loop through rows and apply alternating format
+    For rowIndex = 2 To targetLastRow
+        Set formatRange = targetSheet.Range("A" & rowIndex & ":J" & rowIndex)
+        
+        If rowIndex Mod 2 = 0 Then
+            ' Green fill for even rows
+            formatRange.Interior.Color = RGB(204, 255, 204)  ' Light green shade
+        Else
+            ' White fill for odd rows
+            formatRange.Interior.Color = RGB(255, 255, 255)  ' White
+        End If
+    Next rowIndex
+    
+    MsgBox "Data extraction, validation, and formatting completed!", vbInformation, "Success"
+    
+End Sub
+
+' Function to create a new sheet when the row limit is reached.
+Function CreateNewSheet() As Worksheet
+    Dim newSheet As Worksheet
+    Dim newSheetName As String
+    
+    ' Prompt user for the new sheet name.
+    newSheetName = InputBox("Row limit reached! Enter a name for the new sheet:", "New Sheet Name")
+    
+    ' Ensure user entered a valid name.
+    If Trim(newSheetName) = "" Then
+        MsgBox "No name entered. Operation canceled.", vbExclamation, "Canceled"
+        Exit Function
+    End If
+    
+    ' Check if the sheet name already exists.
+    On Error Resume Next
+    Set newSheet = ThisWorkbook.Sheets(newSheetName)
+    On Error GoTo 0
+    
+    If Not newSheet Is Nothing Then
+        MsgBox "Sheet name already exists! Please try again.", vbCritical, "Error"
+        Exit Function
+    End If
+    
+    ' Add a new sheet at the end of the workbook.
+    Set newSheet = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    
+    ' Attempt to rename the new sheet.
+    On Error Resume Next
+    newSheet.Name = newSheetName
+    If Err.Number <> 0 Then
+        MsgBox "Error renaming the sheet. Please try again.", vbCritical, "Error"
+        Exit Function
+    End If
+    On Error GoTo 0
+    
+    MsgBox "New sheet '" & newSheetName & "' has been created.", vbInformation, "Success"
+    
+    ' Return the newly created worksheet.
+    Set CreateNewSheet = newSheet
+End Function
+
+' Sub to format the "Last Count Dates" sheet professionally
+Sub FormatLastCountDates(targetSheet As Worksheet)
+    Dim lastRow As Long
+    Dim headerRange As Range
+    Dim dataRange As Range
+    Dim colBWidth As Double
+    
+    ' Identify last row with data
+    lastRow = targetSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    
+    ' Define header range
+    Set headerRange = targetSheet.Range("A1:E1")
+    
+    ' Define data range (excluding headers)
+    If lastRow > 1 Then Set dataRange = targetSheet.Range("A2:E" & lastRow)
+    
+    ' Format headers
+    With headerRange
+        .Font.Bold = True
+        .Interior.Color = RGB(200, 200, 200) ' Light gray background
+        .HorizontalAlignment = xlCenter
+        .Borders.LineStyle = xlContinuous
+    End With
+    
+    ' Format data range
+    If Not dataRange Is Nothing Then
+        With dataRange
+            .Borders.LineStyle = xlContinuous ' Add borders
+            .HorizontalAlignment = xlCenter ' Center all data
+            .Columns(3).NumberFormat = "mm/dd/yyyy" ' Format dates as MM/DD/YYYY
+        End With
+    End If
+    
+    ' Autofit Column B (Description) first
+    targetSheet.Columns("B").AutoFit
+    
+    ' Get the width of Column B
+    colBWidth = targetSheet.Columns("B").ColumnWidth
+    
+    ' Set Columns A, C, D, and E to match Column B's width
+    targetSheet.Columns("A:E").ColumnWidth = colBWidth
+End Sub
+
+Private Sub txtSearch_Change()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim searchTerm As String
+    Dim i As Long
+    Dim matchFound As Boolean
+    
+    ' Retrieve and normalize the search term.
+    searchTerm = Trim(LCase(Me.txtSearch.Value))
+    
+    ' If the search term is empty, clear previous results and exit.
+    If searchTerm = "" Then
+        lstboxResults.Clear
+        Exit Sub
+    End If
+
+    ' Set reference to the "Last Count Dates" sheet.
+    Set ws = ThisWorkbook.Sheets("Last Count Dates")
+    
+    ' Clear previous search results.
+    lstboxResults.Clear
+    matchFound = False
+
+    ' Determine the last row in Column A (assumes data starts in row 1 with header).
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Loop through each record starting from row 2 (assuming row 1 contains headers).
+    For i = 2 To lastRow
+        Dim partNumber As String, description As String, cycleDate As Variant, wsName As String
+        
+        partNumber = CStr(ws.Cells(i, 1).Value)
+        description = CStr(ws.Cells(i, 2).Value)
+        cycleDate = ws.Cells(i, 3).Value
+        wsName = CStr(ws.Cells(i, 5).Value)
+        
+        ' Look for the search term in either Part Number (Column A) or Description (Column B).
+        If (InStr(1, LCase(partNumber), searchTerm) > 0) Or _
+           (InStr(1, LCase(description), searchTerm) > 0) Then
+           
+            With lstboxResults
+                ' Add Part Number to Column 0.
+                .AddItem partNumber
+                ' Add Description to Column 1.
+                .List(.ListCount - 1, 1) = description
+                ' Add Last Cycle Date (formatted) to Column 2.
+                .List(.ListCount - 1, 2) = Format(cycleDate, "MM/DD/YYYY")
+                ' Add Worksheet Name to Column 3.
+                .List(.ListCount - 1, 3) = wsName
+                ' Add Row Number (for precise reference) to Column 4.
+                .List(.ListCount - 1, 4) = i
+            End With
+            
+            matchFound = True
+        End If
+    Next i
+
+    ' Notify the user if no matches were found.
+    If Not matchFound Then
+        MsgBox "No results found!", vbExclamation, "Search"
+    End If
+End Sub
+
+Private Sub lstboxResults_Click()
+    Dim ws As Worksheet
+    Dim selectedRowID As Long
+    Dim partNumber As String
+    Dim lastCycleDate As String
+    Dim sheetName As String
+    Dim discrepancyValue As Double
+    Dim originalSheet As Worksheet
+    Dim cell As Range
+    Dim foundMatch As Boolean
+    Dim perCost As Double
+    Dim i As Long
+    
+    ' Reference the "Last Count Dates" worksheet.
+    Set ws = ThisWorkbook.Sheets("Last Count Dates")
+    
+    ' Exit if no item is selected.
+    If lstboxResults.listIndex = -1 Then Exit Sub
+
+    ' --- Read basic details from the selected ListBox row ---
+    partNumber = Trim(lstboxResults.List(lstboxResults.listIndex, 0))       ' Column 0: Part Number
+    Me.TxtDescription.Value = lstboxResults.List(lstboxResults.listIndex, 1) ' Column 1: Description
+    lastCycleDate = Trim(lstboxResults.List(lstboxResults.listIndex, 2))      ' Column 2: Last Cycle Date
+    sheetName = Trim(lstboxResults.List(lstboxResults.listIndex, 3))          ' Column 3: Worksheet Name
+    selectedRowID = CLng(lstboxResults.List(lstboxResults.listIndex, 4))      ' Column 4: Row ID
+    
+    ' --- Retrieve additional details from the "Last Count Dates" sheet ---
+    Me.txtPartNumber.Value = ws.Cells(selectedRowID, 1).Value
+    Me.TxtDescription.Value = ws.Cells(selectedRowID, 2).Value
+    Me.txtLastCycleCount.Value = Format(ws.Cells(selectedRowID, 3).Value, "MM/DD/YYYY")
+    Me.txtWrkSheet.Value = ws.Cells(selectedRowID, 5).Value
+    
+    ' Obtain the discrepancy value from the sheet and store safely.
+    discrepancyValue = ws.Cells(selectedRowID, 4).Value
+    If IsNumeric(discrepancyValue) Then
+        Me.txtDiscRec.Value = discrepancyValue
+    Else
+        Me.txtDiscRec.Value = 0
+    End If
+    ' Indicate if discrepancy exists.
+    Me.txtDiscrepancy.Value = IIf(discrepancyValue <> 0, "Yes", "No")
+    
+    ' --- Bin lookup ---
+    Me.txtBin.Value = ""
+    If discrepancyValue = 0 Then
+        Me.txtBin.Value = "No Discrepancy"
+    Else
+        foundMatch = False
+        If sheetName <> "" Then
+            On Error Resume Next
+            Set originalSheet = ThisWorkbook.Sheets(sheetName)
+            On Error GoTo 0
+            If Not originalSheet Is Nothing Then
+                Dim lastRowOrig As Long
+                lastRowOrig = originalSheet.Cells(originalSheet.Rows.Count, 2).End(xlUp).Row
+                For Each cell In originalSheet.Range("B2:B" & lastRowOrig)
+                    ' Compare the part numbers (case-insensitive).
+                    If StrComp(Trim(cell.Value), Trim(partNumber), vbTextCompare) = 0 Then
+                        ' Check Column F for a nonzero discrepancy value.
+                        If IsNumeric(originalSheet.Cells(cell.Row, 6).Value) Then
+                            If CDbl(originalSheet.Cells(cell.Row, 6).Value) <> 0 Then
+                                Me.txtBin.Value = originalSheet.Cells(cell.Row, 1).Value
+                                foundMatch = True
+                                Exit For
+                            End If
+                        End If
+                    End If
+                Next cell
+                If Not foundMatch Then
+                    Me.txtBin.Value = "Bin not found"
+                End If
+            Else
+                Me.txtBin.Value = "Sheet not found"
+            End If
+        End If
+    End If
+    
+    ' --- Retrieve perCost from the "Items" sheet based on part number ---
+    Dim itemWs As Worksheet
+    Set itemWs = ThisWorkbook.Sheets("Items")
+    Dim lastRowItems As Long
+    lastRowItems = itemWs.Cells(itemWs.Rows.Count, 2).End(xlUp).Row
+    perCost = 0
+    For i = 2 To lastRowItems
+        If Trim(CStr(itemWs.Cells(i, 2).Value)) = partNumber Then
+            perCost = itemWs.Cells(i, 9).Value ' Assumes Column I stores the perCost value.
+            Exit For
+        End If
+    Next i
+    
+    ' Calculate and display count cost if a perCost is found.
+    If perCost > 0 Then
+        Me.txtCountCost.Value = Format(CDbl(Me.txtDiscRec.Value) * perCost, "$#,##0.00")
+    Else
+        Me.txtCountCost.Value = ""
+    End If
+    
+    ' --- Adjustment Table Lookup (Optional) ---
+    Me.txtAdjustmentTrack.Value = "Sheet not found" ' Default value
+    If sheetName <> "" Then
+        Dim adjSheet As Worksheet
+        Dim adjLastRow As Long, adjRow As Long
+        Dim adjValue As String
+        
+        On Error Resume Next
+        Set adjSheet = ThisWorkbook.Sheets("Adjustment Table")
+        On Error GoTo 0
+        If Not adjSheet Is Nothing Then
+            adjLastRow = adjSheet.Cells(adjSheet.Rows.Count, 1).End(xlUp).Row
+            foundMatch = False
+            For adjRow = 1 To adjLastRow
+                If StrComp(Trim(LCase(adjSheet.Cells(adjRow, 1).Value)), LCase(sheetName), vbTextCompare) = 0 Then
+                    adjValue = Trim(UCase(adjSheet.Cells(adjRow, 2).Value))
+                    Select Case adjValue
+                        Case "Y"
+                            Me.txtAdjustmentTrack.Value = "Yes"
+                        Case "NA"
+                            Me.txtAdjustmentTrack.Value = "Not Applicable"
+                        Case Else
+                            Me.txtAdjustmentTrack.Value = "No"
+                    End Select
+                    foundMatch = True
+                    Exit For
+                End If
+            Next adjRow
+            If Not foundMatch Then
+                Me.txtAdjustmentTrack.Value = "Adjustment Table not found"
+            End If
+        Else
+            Me.txtAdjustmentTrack.Value = "Adjustment Table not found"
+        End If
+    End If
+End Sub
+
+Private Sub UserForm_Initialize()
+    ' Set the size of the UserForm
+    Me.Width = 666.75  ' Set width to 362.25
+    Me.Height = 318    ' Set height to 264
+
+    ' Center the UserForm on the screen
+    ' Me.StartUpPosition = 0 ' Manual position
+    ' Me.Top = 642
+    ' Me.Left = 1053
+End Sub
+
+
+Private Sub txtPartNumber_Change()
+    Dim ws As Worksheet
+    Dim partNumber As String
+    Dim perCost As Double
+    Dim discRec As Double
+    Dim lastRow As Long
+    Dim found As Boolean
+    Dim i As Long
+    
+    ' Set the worksheet that holds the item data.
+    Set ws = ThisWorkbook.Sheets("Items")
+    
+    ' Get and trim the part number from the control.
+    partNumber = Trim(Me.txtPartNumber.Value)
+    
+    ' If no part number is entered, clear outputs and exit.
+    If partNumber = "" Then
+        Me.txtpercost.Value = ""
+        Me.txtCountCost.Value = ""
+        Exit Sub
+    End If
+    
+    ' Determine the last row in Column B (where part numbers reside).
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+    found = False
+    
+    Debug.Print "PartNumber Entered: " & partNumber
+    
+    ' Loop through rows in Column B to find the part number.
+    For i = 2 To lastRow
+        Debug.Print "Checking row " & i & ": " & ws.Cells(i, 2).Value
+        If Trim(ws.Cells(i, 2).Value) = partNumber Then
+            perCost = ws.Cells(i, 9).Value   ' Assume perCost is in Column I (9)
+            found = True
+            Debug.Print "Match found at row " & i & ". PerCost: " & perCost
+            Exit For
+        End If
+    Next i
+    
+    ' If a match was found, update the perCost control and compute count cost.
+    If found Then
+        ' Update the perCost control with formatting.
+        Me.txtpercost.Value = Format(perCost, "$#,##0.00")
+        
+        ' Validate and retrieve the discrepancy value.
+        If IsNumeric(Trim(Me.txtDiscRec.Value)) And Me.txtDiscRec.Value <> "" Then
+            discRec = CDbl(Trim(Me.txtDiscRec.Value))
+            Debug.Print "txtDiscRec Value: " & discRec
+            ' Calculate and update the Count Cost (discrepancy * perCost).
+            Me.txtCountCost.Value = Format(discRec * perCost, "$#,##0.00")
+        Else
+            Me.txtCountCost.Value = ""
+            Debug.Print "Invalid txtDiscRec value"
+        End If
+    Else
+        ' If part number not found, clear related text boxes.
+        Me.txtpercost.Value = ""
+        Me.txtCountCost.Value = ""
+        Debug.Print "Part number not found."
+    End If
+End Sub
