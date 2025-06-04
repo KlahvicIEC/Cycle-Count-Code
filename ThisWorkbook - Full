@@ -1,0 +1,93 @@
+Private Sub Workbook_NewSheet(ByVal Sh As Object)
+    Dim wsLog As Worksheet
+    Dim NextRow As Long
+    Dim exists As Boolean
+    Dim lastRow As Long
+
+    If Sh.Name = "BACKGROUND" Then Exit Sub
+
+    On Error Resume Next
+    Set wsLog = ThisWorkbook.Sheets("Adjustment Table")
+    On Error GoTo 0
+
+    If Not wsLog Is Nothing Then
+        With wsLog
+            Application.ScreenUpdating = False
+            .Visible = xlSheetVisible
+            ' Get the next available row in column A
+            NextRow = .Cells(.Rows.Count, "A").End(xlUp).Row + 1
+            lastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+
+            ' Check if the new sheet is already listed
+            exists = False
+            For i = 1 To lastRow
+                If .Cells(i, 1).Value = Sh.Name Then
+                    exists = True
+                    Exit For
+                End If
+            Next i
+
+            ' Add the sheet name only if it's not already listed
+            If Not exists Then
+                .Cells(NextRow, 1).Value = Sh.Name
+            End If
+            .Visible = xlSheetHidden
+            Application.ScreenUpdating = True
+        End With
+    End If
+End Sub
+
+Private Sub Workbook_Open()
+    Dim wsLog As Worksheet
+    Dim ws As Worksheet
+    Dim NextRow As Long
+    Dim lastRow As Long
+    Dim i As Long
+    Dim exists As Boolean
+    Dim frm As New frmLastCycleDate
+
+    ' Locate the "Adjustment Table" sheet
+    On Error Resume Next
+    Set wsLog = ThisWorkbook.Sheets("Adjustment Table")
+    On Error GoTo 0
+
+    ' Refresh all data connections and pivot tables
+    ThisWorkbook.RefreshAll
+    Application.CalculateFullRebuild
+
+    If Not wsLog Is Nothing Then
+        Application.ScreenUpdating = False
+        With wsLog
+            .Visible = xlSheetVisible
+            NextRow = .Cells(.Rows.Count, "A").End(xlUp).Row + 1 ' Get next row in column A
+
+            For Each ws In ThisWorkbook.Sheets
+                If ws.Visible = xlSheetVisible And _
+                   ws.Name <> .Name And _
+                   ws.Name <> "BACKGROUND" Then
+                   
+                    ' Check if the sheet is already listed in column A
+                    exists = False
+                    For i = 1 To .Cells(.Rows.Count, "A").End(xlUp).Row
+                        If .Cells(i, 1).Value = ws.Name Then
+                            exists = True
+                            Exit For
+                        End If
+                    Next i
+
+                    ' If not already listed, add to column A
+                    If Not exists Then
+                        .Cells(NextRow, 1).Value = ws.Name
+                        NextRow = NextRow + 1
+                    End If
+                End If
+            Next ws
+            
+            .Visible = xlSheetHidden
+        End With
+        
+        frm.ExtractDataToLastCountDates
+        
+        Application.ScreenUpdating = True
+    End If
+End Sub
