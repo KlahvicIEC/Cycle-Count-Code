@@ -1,0 +1,134 @@
+Option Explicit
+
+'------------------------------
+' Clear Fields/Selections
+'------------------------------
+Private Sub cmdClearAdd_Click()
+    ' Clear the listbox selection and reset the updating textbox.
+    lstboxSheets.listIndex = -1
+    txtUpdating.Value = ""
+    
+    ' If you have any other fields to clear, do so here.
+    ' For example:
+    ' cboExample.Value = ""
+    ' chkExample.Value = False
+    ' Reset any additional controls to their default state if desired.
+End Sub
+
+'------------------------------
+' Close the Form and Activate BACKGROUND Sheet
+'------------------------------
+Private Sub cmdCloseUpdater_Click()
+    Worksheets("Dashboard").Activate
+    Unload Me ' Closes the current form (frmSheetUpdate)
+End Sub
+
+'------------------------------
+' Open the Cycle Count Dashboard Form
+'------------------------------
+Private Sub cmdDashboard_Click()
+    frmCycleCount1.Show
+End Sub
+
+'------------------------------
+' Select a Sheet from the Listbox
+'------------------------------
+Private Sub cmdSelect_Click()
+    ' Check if an item is selected in the listbox.
+    If lstboxSheets.listIndex = -1 Then
+        MsgBox "Please select a sheet from the list", vbExclamation
+        Exit Sub
+    End If
+    
+    Dim selectedSheetName As String
+    selectedSheetName = lstboxSheets.Value
+    
+    ' Populate the selected sheet name into the txtUpdating textbox and lock it.
+    txtUpdating.Value = selectedSheetName
+    txtUpdating.Locked = True
+    
+    ' Activate the selected sheet.
+    ThisWorkbook.Sheets(selectedSheetName).Activate
+    
+    ' Inform the user.
+    MsgBox "You have selected the sheet: " & selectedSheetName, vbInformation
+End Sub
+
+'------------------------------
+' Update the Active Sheet With New Data
+'------------------------------
+Private Sub cmdUpdateSheet_Click()
+    ' Ensure an active sheet is selected.
+    If ActiveSheet Is Nothing Then
+        MsgBox "Please select a sheet first using the 'Select Sheet' button.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Validate that all required textboxes are filled.
+    If txtBin.Value = "" Or txtItem.Value = "" Or txtDesc.Value = "" Or txtP21.Value = "" Or txtPhysical.Value = "" Then
+        MsgBox "Please fill in all the fields before updating.", vbExclamation
+        Exit Sub
+    End If
+    
+    Dim NextRow As Long
+    ' Find the next available row in the active sheet (assumes headers are in row 1).
+    NextRow = ActiveSheet.Cells(ActiveSheet.Rows.Count, 1).End(xlUp).Row + 1
+    
+    ' Insert data into the active sheet.
+    With ActiveSheet
+        .Cells(NextRow, 1).Value = txtBin.Value        ' Column A
+        .Cells(NextRow, 2).Value = txtItem.Value       ' Column B
+        .Cells(NextRow, 3).Value = txtDesc.Value       ' Column C
+        .Cells(NextRow, 4).Value = txtP21.Value        ' Column D
+        .Cells(NextRow, 5).Value = txtPhysical.Value   ' Column E
+        
+        ' If there is a previous row, copy formatting from it.
+        If NextRow > 1 Then
+            .Rows(NextRow - 1).Copy
+            .Rows(NextRow).PasteSpecial Paste:=xlPasteFormats
+            Application.CutCopyMode = False
+        End If
+        
+        ' Set formula for Column F to calculate Discrepancy (Actual Count - P21 Count).
+        .Cells(NextRow, 6).Formula = "=E" & NextRow & "-D" & NextRow
+    End With
+    
+    MsgBox "The sheet has been updated successfully.", vbInformation
+    
+    ' Clear the input textboxes for the next entry.
+    txtBin.Value = ""
+    txtItem.Value = ""
+    txtDesc.Value = ""
+    txtP21.Value = ""
+    txtPhysical.Value = ""
+End Sub
+
+Private Sub UserForm_Initialize()
+    Dim ws As Worksheet
+    Dim ExcludedSheets As Variant
+    
+    ' Define sheets to be excluded
+    ExcludedSheets = Array("Last Count Dates", "HoldList", "Items", "Dashboard", "BACKGROUND", "Sheet1", "Adjustment Table", "Random Cycle Count Log")
+
+    ' Clear ListBox before adding items
+    lstboxSheets.Clear
+
+    ' Loop through worksheets
+    For Each ws In ThisWorkbook.Worksheets
+        If Not IsExcluded(ws.Name, ExcludedSheets) Then
+            lstboxSheets.AddItem ws.Name ' Add sheet name to ListBox
+            Debug.Print "Adding to ListBox: " & ws.Name
+        End If
+    Next ws
+End Sub
+
+Function IsExcluded(sheetName As String, ExcludedSheets As Variant) As Boolean
+    Dim i As Integer
+    For i = LBound(ExcludedSheets) To UBound(ExcludedSheets)
+        If ExcludedSheets(i) = sheetName Then
+            IsExcluded = True
+            Exit Function
+        End If
+    Next i
+    IsExcluded = False
+End Function
