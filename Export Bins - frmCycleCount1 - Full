@@ -1,0 +1,254 @@
+Private Sub btnExportBins_Click()
+    On Error GoTo ExportError
+
+    Dim wsSource As Worksheet, wsNew As Worksheet
+    Dim lastRow As Long, rowIndex As Long, newRow As Long
+    Dim selectedBins As Object
+    Dim sheetName As String
+    Dim i As Integer, templateChoice As Integer
+    Dim userInput As String
+    Dim userXX As String, userDate As String, finalSheetName As String
+    Dim currentDate As String
+    Dim invalidChars As String
+    Dim isValidName As Boolean
+    Dim templateStr As String
+    Dim assignedUser As String
+    Dim userList As String
+    Dim headerRange As Range, dataRange As Range
+
+    ' Set source worksheet
+    Set wsSource = ThisWorkbook.Sheets("Items")
+    
+    ' Get selected bins from lstboxCycle
+    Set selectedBins = CreateObject("Scripting.Dictionary")
+    
+    If lstboxCycle.ListCount = 0 Then
+        MsgBox "No bins have been selected for export.", vbExclamation
+        Exit Sub
+    End If
+    
+    For i = 0 To lstboxCycle.ListCount - 1
+        selectedBins(lstboxCycle.List(i, 0)) = True
+    Next i
+    
+    ' Step 1: Ask user for template selection via InputBox
+    userInput = InputBox("Select Template (1-5):" & vbCrLf & _
+                         "1) MAIN BIN CYCLE COUNT" & vbCrLf & _
+                         "2) SHORTAGE CYCLE COUNT" & vbCrLf & _
+                         "3) MULTI-PART CYCLE COUNT" & vbCrLf & _
+                         "4) MULTI BIN CYCLE COUNT" & vbCrLf & _
+                         "5) INVOICE TO P21 DISCREPANCY", "Template Selection")
+
+    If userInput = "" Or Not IsNumeric(userInput) Or CInt(userInput) < 1 Or CInt(userInput) > 5 Then
+        MsgBox "Invalid selection. Process cancelled.", vbExclamation
+        Exit Sub
+    End If
+
+    templateChoice = CInt(userInput)
+    Select Case templateChoice
+        Case 1: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 2: templateStr = "SCC – XX Parts – MM-DD-YYYY"
+        Case 3: templateStr = "MPCC – XX Parts – MM-DD-YYYY"
+        Case 4: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 5: templateStr = "IP21D - XX Parts - MM-DD-YYYY"
+    End Select
+
+    ' Step 2: Ask user for "XX" value
+    userXX = InputBox("Enter Bin Count for 'XX':", "Count Value")
+    If Trim(userXX) = "" Then Exit Sub
+
+    ' Step 3: Ask user for the date
+    userDate = InputBox("Enter today's date:", "Date Entry", Format(Date, "MM-DD-YYYY"))
+    If Trim(userDate) = "" Then Exit Sub
+
+    ' Construct final sheet name
+    finalSheetName = Replace(templateStr, "XX", Trim(userXX))
+    finalSheetName = Replace(finalSheetName, "MM-DD-YYYY", Trim(userDate))
+
+    ' Validate sheet name
+    invalidChars = "\/[]?*:<>|"
+    isValidName = True
+    For i = 1 To Len(invalidChars)
+        If InStr(finalSheetName, Mid(invalidChars, i, 1)) > 0 Then
+            MsgBox "Invalid character found in sheet name.", vbExclamation
+            Exit Sub
+        End If
+    Next i
+
+    If Len(finalSheetName) > 31 Then
+        MsgBox "Sheet name too long.", vbExclamation
+        Exit Sub
+    End If
+    
+    sheetName = finalSheetName
+
+    ' Check if sheet already exists
+    If SheetExists(sheetName) Then
+        If MsgBox("Sheet '" & sheetName & "' exists. Overwrite?", vbYesNo + vbExclamation) = vbNo Then Exit Sub
+        Application.DisplayAlerts = False
+        ThisWorkbook.Sheets(sheetName).Delete
+        Application.DisplayAlerts = True
+    End If
+
+    ' Create new worksheet
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    wsNew.Name = sheetName
+
+    currentDate = Format(Date, "mmmm dd, yyyy")
+
+    ' Step 4: Assign Initial Counter
+    Dim userChoice As Integer
+
+    ' Define available users
+    userList = "1) Ken Lahvic" & vbCrLf & _
+           "2) Scott Frazier" & vbCrLf & _
+           "3) Trever Oelschlaeger" & vbCrLf & _
+           "4) Blake Arlowe" & vbCrLf & _
+           "5) Aaron Rivera" & vbCrLf & _
+           "6) Chris Lynch"
+
+    ' Prompt user selection
+    userInput = InputBox("Select Initial Counter by entering a number (1-6):" & vbCrLf & vbCrLf & userList, "Assign Initial Counter")
+
+    ' Validate user input
+    If userInput = "" Or Not IsNumeric(userInput) Then
+    MsgBox "Invalid selection. Process cancelled.", vbExclamation
+    Exit Sub
+    End If
+
+    userChoice = CInt(userInput)
+    If userChoice < 1 Or userChoice > 6 Then
+    MsgBox "Please enter a number between 1 and 6.", vbExclamation
+    Exit Sub
+    End If
+
+    ' Assign user based on choice
+    Select Case userChoice
+        Case 1: assignedUser = "Ken Lahvic"
+        Case 2: assignedUser = "Scott Frazier"
+        Case 3: assignedUser = "Trever Oelschlaeger"
+        Case 4: assignedUser = "Blake Arlowe"
+        Case 5: assignedUser = "Aaron Rivera"
+        Case 6: assignedUser = "Chris Lynch"
+    End Select
+
+    ' Update header row with assigned user
+    wsNew.Range("A1").Value = sheetName & " - " & currentDate & " | Initial Counter: " & assignedUser
+    wsNew.Range("A1").HorizontalAlignment = xlCenter
+    wsNew.Range("A1").Font.Bold = True
+    wsNew.Range("A1").Font.Size = 14
+
+
+    ' Step 5: Update header row with assigned user
+    With wsNew
+        .Range("A1:G1").Merge
+        .Range("A1").Value = sheetName & " - " & currentDate & " | Initial Counter: " & assignedUser
+        .Range("A1").HorizontalAlignment = xlCenter
+        .Range("A1").Font.Bold = True
+        .Range("A1").Font.Size = 14
+    End With
+
+    ' Step 6: Add Headers
+    With wsNew
+        .Cells(2, 1).Value = "Bin"
+        .Cells(2, 2).Value = "Item"
+        .Cells(2, 3).Value = "Description"
+        .Cells(2, 4).Value = "P21 Count"
+        .Cells(2, 5).Value = "Actual Count"
+        .Cells(2, 6).Value = "Discrepancy"
+        .Cells(2, 7).Value = "Notes"
+        
+        Set headerRange = .Range("A2:G2")
+        headerRange.Font.Bold = True
+        headerRange.Interior.Color = RGB(200, 200, 200)
+        headerRange.HorizontalAlignment = xlCenter
+        headerRange.Borders.LineStyle = xlContinuous
+    End With
+    
+    wsNew.Columns("B").NumberFormat = "@"
+
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    newRow = 3
+
+    ' Step 7: Populate Data
+    For rowIndex = 2 To lastRow
+        If selectedBins.exists(wsSource.Cells(rowIndex, 1).Value) Then
+            With wsNew
+                .Cells(newRow, 1).Value = wsSource.Cells(rowIndex, 1).Value
+                .Cells(newRow, 2).Value = wsSource.Cells(rowIndex, 2).Text
+                .Cells(newRow, 3).Value = wsSource.Cells(rowIndex, 3).Value
+                .Cells(newRow, 4).Value = wsSource.Cells(rowIndex, 6).Value
+                .Cells(newRow, 5).Value = ""
+                .Cells(newRow, 6).Formula = "=E" & newRow & "-D" & newRow
+                .Cells(newRow, 7).Value = ""
+            End With
+            newRow = newRow + 1
+        End If
+    Next rowIndex
+    
+    Set dataRange = wsNew.Range("A2:G" & newRow - 1)
+    With dataRange
+        .Borders.LineStyle = xlContinuous
+        .HorizontalAlignment = xlCenter
+    End With
+    
+    'Set Specific Column Widths
+    With wsNew
+        .Columns("A").ColumnWidth = 18
+        .Columns("D").ColumnWidth = 15
+        .Columns("E").ColumnWidth = 15
+        .Columns("F").ColumnWidth = 15
+        .Columns("G").ColumnWidth = 30
+        .Columns("B").AutoFit
+        .Columns("C").AutoFit
+    End With
+    
+    Dim r As Long
+    For r = 1 To newRow - 1
+        wsNew.Rows(r).rowHeight = 25
+    Next r
+    
+    wsNew.Range("D3:D" & newRow - 1).NumberFormat = "0"
+    wsNew.Range("F3:F" & newRow - 1).NumberFormat = "0"
+    
+    With wsNew
+        .Activate
+        .Range("A3").Select
+        ActiveWindow.FreezePanes = True
+    End With
+    
+    'Apply Conditional Formatting
+    Dim lastDataRow As Long
+        lastDataRow = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).Row
+    
+        With wsNew.Range("A3:G" & lastDataRow).FormatConditions.Add(Type:=xlExpression, Formula1:="=$F3<>0")
+            .Interior.Color = RGB(255, 255, 153)
+    End With
+    
+    'Sort the Sheet
+    With wsNew.Sort
+        .SortFields.Clear
+        .SortFields.Add key:=wsNew.Range("A3:A" & lastDataRow), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange wsNew.Range("A2:G" & lastDataRow)
+        .Header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+        
+    ' Step 8: Final Formatting & Refresh
+    Call PopulateSheetsList
+
+    Exit Sub
+
+ExportError:
+    MsgBox "An error occurred: " & Err.description, vbCritical, "Error"
+End Sub
+
+Function SheetExists(sheetName As String) As Boolean
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    SheetExists = Not ws Is Nothing
+    On Error GoTo 0
+End Function
