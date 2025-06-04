@@ -1,0 +1,270 @@
+Option Explicit
+
+Sub CreateDashboardRobust()
+    Dim dashSheet As Worksheet
+    Dim wsItems As Worksheet, wsLCD As Worksheet
+    Dim sheetName As String
+    Dim chartObj As ChartObject
+    Dim currentDate As Date
+    Dim pvtCache As PivotCache, pvtCache2 As PivotCache
+    Dim pvtTable As PivotTable, pvtTable2 As PivotTable
+    Dim j As Long, curMonth As Date
+    Dim ptField As PivotField
+    Dim conn As WorkbookConnection
+    Dim lastRowLCDData As Long
+    Dim sFormula As String
+    Dim dtStart As Date, dtEnd As Date
+    
+    sheetName = "Dashboard"
+    
+    '-------------------------------
+    ' Refresh data connection(s) on "Items"
+    '-------------------------------
+    For Each conn In ThisWorkbook.Connections
+        If InStr(1, conn.Name, "Items", vbTextCompare) > 0 Then
+            conn.Refresh
+        End If
+    Next conn
+    ' Wait briefly to allow refresh to complete.
+    Application.Wait Now + TimeValue("0:00:05")
+    
+    '-------------------------------
+    ' Delete existing Dashboard sheet if it exists.
+    '-------------------------------
+    Application.DisplayAlerts = False
+    On Error Resume Next
+    Set dashSheet = ThisWorkbook.Sheets(sheetName)
+    If Not dashSheet Is Nothing Then dashSheet.Delete
+    On Error GoTo 0
+    Application.DisplayAlerts = True
+    
+    ' Create a new Dashboard sheet.
+    Set dashSheet = ThisWorkbook.Sheets.Add(Before:=ThisWorkbook.Sheets(1))
+    dashSheet.Name = sheetName
+    
+    ' Set references to source worksheets.
+    Set wsItems = ThisWorkbook.Sheets("Items")
+    Set wsLCD = ThisWorkbook.Sheets("Last Count Dates")
+    currentDate = Date
+    
+    With dashSheet
+        .Cells.Clear
+        
+        '======================================
+        ' Section 1: KPI Summary (Rows 3 to 13)
+        '======================================
+        .Range("A1").Value = "Robust Cycle Count Dashboard"
+        With .Range("A1")
+            .Font.Size = 20
+            .Font.Bold = True
+        End With
+        
+        .Range("A3").Value = "Total Stock Items"
+        .Range("B3").Formula = "=COUNTA(Items!B:B)-1"
+        
+        .Range("A4").Value = "Total Qty On Hand"
+        .Range("B4").Formula = "=SUM(Items!F:F)"
+        
+        .Range("A5").Value = "Allocated Quantity"
+        .Range("B5").Formula = "=SUM(Items!G:G)"
+        
+        .Range("A6").Value = "Available Quantity"
+        .Range("B6").Formula = "=SUM(Items!F:F)-SUM(Items!G:G)"
+        
+        .Range("A7").Value = "Average MAC"
+        .Range("B7").Formula = "=AVERAGE(Items!I:I)"
+        
+        .Range("A8").Value = "Total Cycle Count Records"
+        .Range("B8").Formula = "=COUNTA('Last Count Dates'!A:A)-1"
+        
+        .Range("A9").Value = "Total Discrepancy Cost"
+        .Range("B9").Formula = "=SUM('Last Count Dates'!H:H)"
+        
+        .Range("A10").Value = "Avg Discrepancy Cost"
+        .Range("B10").Formula = "=AVERAGE('Last Count Dates'!H:H)"
+        
+        .Range("A11").Value = "Total MAC Cost On Hand"
+        .Range("B11").Formula = "=SUMPRODUCT(Items!F2:F10000, Items!I2:I10000)"
+        
+        .Range("A12").Value = "Total MAC Cost Allocated"
+        .Range("B12").Formula = "=SUMPRODUCT(Items!G2:G10000, Items!I2:I10000)"
+        
+        .Range("A13").Value = "Total MAC Cost Available"
+        .Range("B13").Formula = "=SUMPRODUCT(Items!F2:F10000, Items!I2:I10000)-SUMPRODUCT(Items!G2:G10000, Items!I2:I10000)"
+        
+        .Range("D3").Value = "Cycle Count Accuracy (%)"
+        .Range("E3").Formula = "=IF((COUNTA('Last Count Dates'!A:A)-1)=0,0,COUNTIF('Last Count Dates'!D:D,0)/(COUNTA('Last Count Dates'!A:A)-1))"
+        .Range("E3").NumberFormat = "0.00%"
+        
+        .Range("D4").Value = "Discrepancy Items"
+        .Range("E4").Formula = "=COUNTIFS('Last Count Dates'!A:A, ""<>"", 'Last Count Dates'!D:D, ""<>0"")"
+        
+        .Range("A3:B13").Borders.LineStyle = xlContinuous
+        .Range("D3:E4").Borders.LineStyle = xlContinuous
+        .Range("B3:B10").NumberFormat = "0"
+        .Range("B7").NumberFormat = "$#,##0.00"
+        .Range("B9:B10").NumberFormat = "$#,##0.00"
+        .Range("B11:B13").NumberFormat = "$#,##0.00"
+        
+        '==================================================
+        ' Section 2: Cycle Count Trend Summary (Last 12 Months)
+        '==================================================
+        ' Insert title, merging A15:B15
+        .Range("A15:B15").Merge
+        .Range("A15").Value = "Total Cycle Counts by Month"
+        .Range("A15").HorizontalAlignment = xlCenter
+        .Range("A15:B15").Font.Bold = True
+
+        ' Move table headers down to A16 and B16
+        .Range("A16").Value = "Month"
+        .Range("B16").Value = "Count"
+
+        curMonth = DateSerial(Year(Date), Month(Date), 1)
+        For j = 0 To 11
+        .Cells(17 + j, 1).Value = Format(DateAdd("m", -j, curMonth), "mmm yyyy")
+        .Cells(17 + j, 2).Formula = "=COUNTIFS('Last Count Dates'!C:C, " & _
+        """<=" & Format(Application.WorksheetFunction.EoMonth(DateAdd("m", -j, curMonth), 0), "mm/dd/yyyy") & _
+        """, 'Last Count Dates'!C:C, "">=" & Format(DateAdd("m", -j, curMonth), "mm/dd/yyyy") & """)"
+        Next j
+
+        .Range("A16:B16").Font.Bold = True
+        .Range("A16:B16").Borders.LineStyle = xlContinuous
+
+        
+        '==================================================
+        ' Section 3: Cycle Count Trend Chart
+        '==================================================
+        ' Position the chart so that its top-left corner is at D15.
+        Set chartObj = .ChartObjects.Add(Left:=.Range("D15").Left, Top:=.Range("D16").Top, Width:=240, Height:=250)
+        With chartObj.Chart
+            .ChartType = xlColumnClustered
+            ' Use the trend table from A15:B27.
+            .SetSourceData Source:=dashSheet.Range("A15:B27")
+            .HasTitle = True
+            .ChartTitle.Text = "Cycle Count Records by Month"
+        End With
+        
+        '==================================================
+        ' Section 4: Pivot Table for Discrepancy Cost by Worksheet
+        '==================================================
+        lastRowLCDData = wsLCD.Cells(wsLCD.Rows.Count, 1).End(xlUp).Row
+        Set pvtCache = ThisWorkbook.PivotCaches.Create(SourceType:=xlDatabase, _
+                        SourceData:=wsLCD.Range("A1:H" & lastRowLCDData))
+        Set pvtTable = pvtCache.CreatePivotTable(TableDestination:=.Range("J3"), TableName:="pvtDiscrepancy")
+        With pvtTable
+            With .PivotFields("Worksheet")
+                .Orientation = xlRowField
+                .Position = 1
+            End With
+            On Error Resume Next
+            Set ptField = .PivotFields("Total Cost of Disc")
+            On Error GoTo 0
+            If ptField Is Nothing Then
+                Set ptField = .PivotFields(8)
+            End If
+            With ptField
+                .Orientation = xlDataField
+                .Function = xlSum
+                .NumberFormat = "$#,##0.00"
+            End With
+        End With
+        
+        '==================================================
+        ' Section 5: Discrepancy Cost Over Time
+        '==================================================
+        ' Headers start at A31.
+        .Range("A31").Value = "Month"
+        .Range("B31").Value = "Total Disc Cost"
+        For j = 0 To 11
+            dtStart = DateAdd("m", -j, curMonth)
+            dtEnd = Application.WorksheetFunction.EoMonth(dtStart, 0)
+            .Cells(32 + j, 1).Value = Format(dtStart, "mmm yyyy")
+            sFormula = "=SUMIFS('Last Count Dates'!H:H, 'Last Count Dates'!C:C, " & _
+                       """<=" & Format(dtEnd, "mm/dd/yyyy") & """, 'Last Count Dates'!C:C, "">=" & _
+                       Format(dtStart, "mm/dd/yyyy") & """)"
+            .Cells(32 + j, 2).Formula = sFormula
+        Next j
+        .Range("A31:B31").Font.Bold = True
+        .Range("A31:B31").Borders.LineStyle = xlContinuous
+        .Range("B32:B43").NumberFormat = "_($* #,##0.00_);_($* (#,##0.00);_($* ""-""??_);_(@_)"
+        
+        '==================================================
+        ' Section 6: Top 10 Items by Discrepancy Cost
+        '==================================================
+        ' Move this pivot table to start at G3 with a title.
+        .Range("G2").Value = "Top 10 Items by Discrepancy Cost"
+        .Range("G2").Font.Bold = True
+
+        Set pvtCache2 = ThisWorkbook.PivotCaches.Create(SourceType:=xlDatabase, _
+                        SourceData:=wsLCD.Range("A1:H" & lastRowLCDData))
+        Set pvtTable2 = pvtCache2.CreatePivotTable(TableDestination:=.Range("G3"), TableName:="pvtTop10Items")
+
+        With pvtTable2
+        .ManualUpdate = True
+    
+        With .PivotFields("Item")
+        .Orientation = xlRowField
+        .Position = 1
+        .ClearAllFilters
+         End With
+    
+        ' Error handling for the pivot field reference
+        On Error Resume Next
+        Set ptField = .PivotFields("Total Cost of Disc")
+        On Error GoTo 0
+    
+        If ptField Is Nothing Then
+            Set ptField = .PivotFields(8)
+        End If
+    
+        With ptField
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "$#,##0.00"
+        End With
+    
+        With .PivotFields("Item")
+            .AutoSort xlDescending, ptField.Caption
+            .PivotFilters.Add Type:=xlTopCount, DataField:=ptField, Value1:=10
+        End With
+    
+        .ManualUpdate = False
+        .RefreshTable
+    End With
+
+        
+        '==================================================
+        ' Section 7: Cycle Count Accuracy Over Time
+        '==================================================
+        ' Headers start at A45.
+        .Range("A45").Value = "Month"
+        .Range("B45").Value = "Accuracy (%)"
+        For j = 0 To 11
+            dtStart = DateAdd("m", -j, curMonth)
+            dtEnd = Application.WorksheetFunction.EoMonth(dtStart, 0)
+            .Cells(46 + j, 1).Value = Format(dtStart, "mmm yyyy")
+            sFormula = "=IF(COUNTIFS('Last Count Dates'!C:C, " & _
+                       """<=" & Format(dtEnd, "mm/dd/yyyy") & """, 'Last Count Dates'!C:C, "">=" & _
+                       Format(dtStart, "mm/dd/yyyy") & """)=0,0, " & _
+                       "COUNTIFS('Last Count Dates'!C:C, " & _
+                       """<=" & Format(dtEnd, "mm/dd/yyyy") & """, 'Last Count Dates'!C:C, "">=" & _
+                       Format(dtStart, "mm/dd/yyyy") & """, 'Last Count Dates'!D:D,0)" & _
+                       "/COUNTIFS('Last Count Dates'!C:C, " & _
+                       """<=" & Format(dtEnd, "mm/dd/yyyy") & """, 'Last Count Dates'!C:C, "">=" & _
+                       Format(dtStart, "mm/dd/yyyy") & """))"
+            .Cells(46 + j, 2).Formula = sFormula
+        Next j
+        .Range("A45:B45").Font.Bold = True
+        .Range("A45:B45").Borders.LineStyle = xlContinuous
+        ' Format the Accuracy column in Section 7 to xx.xx%
+        .Range("B46:B57").NumberFormat = "0.00%)"
+        
+        '==================================================
+        ' Section 8: Final Layout Adjustments
+        '==================================================
+        .Columns.AutoFit
+    End With
+    
+    dashSheet.Activate
+    MsgBox "Robust Dashboard created successfully!", vbInformation
+End Sub
