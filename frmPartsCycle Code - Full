@@ -1,0 +1,650 @@
+Option Explicit
+' Module-level array to store all unique parts for filtering
+Dim allParts() As String
+
+Private Sub cmdHoldTransfer_Click()
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim lastRow As Long
+    Dim binVal As String
+    Dim partVal As String
+    Dim qtyVal As Variant
+    Dim transferred As Boolean
+    
+    ' Check if the HoldList sheet exists
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets("HoldList")
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "HoldList worksheet not found.", vbCritical
+        Exit Sub
+    End If
+    
+    ' Optional: Make sure the HoldList sheet is visible and activate it
+    ws.Visible = xlSheetVisible
+    ws.Activate
+    
+    ' Find the last used row in column A
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    ' If the sheet is empty (or only has headers), start at row 2
+    If lastRow < 2 Then lastRow = 1
+    lastRow = lastRow + 1
+    
+    transferred = False
+    ' Loop through items in lstboxCountList
+    For i = 0 To lstboxCountList.ListCount - 1
+        If lstboxCountList.Selected(i) Then
+            ' Retrieve values from each column;
+            ' Adjust the indices if your list box columns differ.
+            binVal = CStr(lstboxCountList.List(i, 0))
+            partVal = CStr(lstboxCountList.List(i, 1))
+            qtyVal = lstboxCountList.List(i, 2)
+            
+            ' Write items to the HoldList sheet
+            ws.Cells(lastRow, 1).Value = partVal
+            ws.Cells(lastRow, 2).Value = binVal
+            ws.Cells(lastRow, 3).Value = qtyVal
+            
+            lastRow = lastRow + 1
+            transferred = True
+        End If
+    Next i
+    
+    If transferred Then
+        MsgBox "Selected items have been added to the Hold List!", vbInformation, "Success"
+    Else
+        MsgBox "No items selected. Please select at least one item to add to the Hold List.", vbExclamation
+    End If
+End Sub
+
+Private Sub cmdRecallHold_Click()
+    Dim wsHold As Worksheet
+    Dim lastRow As Long
+    Dim response As VbMsgBoxResult
+    Dim i As Long
+    Dim partNumber As String, binLocation As String, qty As Variant
+    Dim listIndex As Long
+
+    ' First, update HoldList before recalling it
+    UpdateHoldListFromItems
+
+    ' Set the worksheet reference
+    Set wsHold = ThisWorkbook.Sheets("HoldList")
+
+    ' Determine last row in HoldList
+    lastRow = wsHold.Cells(wsHold.Rows.Count, "A").End(xlUp).Row
+
+    ' If nothing exists in HoldList, exit
+    If lastRow < 2 Then
+        MsgBox "No items in Hold List to recall.", vbExclamation, "Hold List Empty"
+        Exit Sub
+    End If
+
+    ' Prompt the user before clearing HoldList
+    response = MsgBox("Do you want to empty the Hold List after recalling?", vbYesNo + vbQuestion, "Confirm Deletion")
+
+    ' If user selects "Yes," delete all rows except the header (Row 1)
+    If response = vbYes Then
+        wsHold.Rows("2:" & lastRow).Delete
+        lastRow = 1 ' Reset last row after deletion
+    End If
+
+    ' Refresh lastRow after deletion
+    lastRow = wsHold.Cells(wsHold.Rows.Count, "A").End(xlUp).Row
+
+    ' If HoldList was emptied, stop the recall process
+    If lastRow < 2 Then
+        MsgBox "Hold List was cleared. No items left to recall.", vbExclamation, "Hold List Empty"
+        Exit Sub
+    End If
+
+    ' Clear the list box before repopulating
+    lstboxCountList.Clear
+
+    ' Populate lstboxCountList with HoldList items
+    For i = 2 To lastRow
+        partNumber = wsHold.Cells(i, "A").Value
+        binLocation = wsHold.Cells(i, "B").Value
+        qty = wsHold.Cells(i, "C").Value
+
+        ' Add item to list box
+        lstboxCountList.AddItem partNumber
+        listIndex = lstboxCountList.ListCount - 1
+        lstboxCountList.List(listIndex, 1) = binLocation
+        lstboxCountList.List(listIndex, 2) = qty
+    Next i
+
+    ' Debug check to confirm list box is populated before export
+    Debug.Print "List count after recall: " & lstboxCountList.ListCount
+
+    ' If the list box has items, trigger export automatically
+    If lstboxCountList.ListCount > 0 Then
+        MsgBox "Hold list recalled and updated. Proceeding to export...", vbInformation, "Hold List Loaded"
+        Call cmdExport_Click
+    Else
+        MsgBox "No items were added to the list box. Export canceled.", vbExclamation, "Recall Failed"
+    End If
+End Sub
+
+Private Sub UserForm_Activate()
+    On Error Resume Next
+    
+    ' Refresh all worksheet data connections
+    Dim ws As Worksheet
+    For Each ws In ThisWorkbook.Worksheets
+        ws.ListObjects.RefreshAll
+    Next ws
+    
+    ' Refresh all workbook connections
+    ThisWorkbook.RefreshAll
+    
+    On Error GoTo 0
+End Sub
+
+Private Sub cmdClear_Click()
+    ' Clear all list boxes
+    Me.lstboxParts.Clear
+    Me.lstPartsandBins.Clear
+    Me.lstboxCountList.Clear
+
+    ' Clear the search box
+    Me.txtPartSearch.Value = ""
+
+    ' Set focus to the search box
+    Me.txtPartSearch.SetFocus
+End Sub
+
+Private Sub cmdClose_Click()
+    ' Close the userform
+    Me.Hide
+End Sub
+
+Private Sub cmdExport_Click()
+    On Error GoTo ExportError
+
+    Dim wsSource As Worksheet, wsNew As Worksheet
+    Dim lastRow As Long, rowIndex As Long, newRow As Long
+    Dim sheetName As String
+    Dim i As Long, templateChoice As Integer
+    Dim userInput As String, userXX As String, userDate As String
+    Dim currentDate As String
+    Dim headerRange As Range, dataRange As Range
+    Dim invalidChars As String, isValidName As Boolean
+    Dim selectedBin As String, selectedPart As String
+    Dim matchBin As String, matchPart As String
+    Dim lastDataRow As Long
+    Dim dictSelected As Object
+    Dim rng As Range
+    Dim templateStr As String
+
+    ' Initialize source worksheet and dictionary for selected Bin+Part pairs
+    Set wsSource = ThisWorkbook.Sheets("Items")
+    Set dictSelected = CreateObject("Scripting.Dictionary")
+    
+    ' Ensure there are items in lstboxCountList BEFORE exporting
+    If lstboxCountList.ListCount = 0 Then
+        MsgBox "No bins/items available for export.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Build dictionary of "Bin|Part" keys for selected items
+    For i = 0 To lstboxCountList.ListCount - 1
+        selectedBin = lstboxCountList.List(i, 0)
+        selectedPart = lstboxCountList.List(i, 1)
+        dictSelected(Trim(selectedBin) & "|" & Trim(selectedPart)) = True
+    Next i
+
+    Debug.Print "Total Selected Bins/Parts: " & dictSelected.Count  ' Debugging check
+
+    '-------------------------------------------------------------------
+    ' STEP 1: Ask user for template selection via InputBox:
+    '-------------------------------------------------------------------
+    Dim tempMsg As String
+    tempMsg = "**SELECT A TEMPLATE**" & vbCrLf & vbCrLf & _
+          "1) **MAIN BIN CYCLE COUNT**" & vbCrLf & "    BCC – XX Bins – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "2) **SHORTAGE CYCLE COUNT**" & vbCrLf & "    SCC – XX Parts – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "3) **MULTI-PART CYCLE COUNT**" & vbCrLf & "    MPCC – XX Parts – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "4) **MULTI BIN CYCLE COUNT**" & vbCrLf & "    MBCC – XX Bins – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "5) **INVOICE TO P21 DISCREPANCY**" & vbCrLf & "    IP21D - XX Parts - MM-DD-YYYY"
+
+    userInput = InputBox(tempMsg, "Select Template")
+
+    
+    If userInput = "" Or Not IsNumeric(userInput) Then
+        MsgBox "Invalid selection. Please enter a number between 1-5.", vbExclamation
+        Exit Sub
+    End If
+    
+    templateChoice = CInt(userInput)
+    If templateChoice < 1 Or templateChoice > 5 Then
+        MsgBox "Invalid selection. Please enter a number between 1-5.", vbExclamation
+        Exit Sub
+    End If
+    
+    Select Case templateChoice
+        Case 1: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 2: templateStr = "SCC – XX Parts – MM-DD-YYYY"
+        Case 3: templateStr = "MPCC – XX Parts – MM-DD-YYYY"
+        Case 4: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 5: templateStr = "IP21D - XX Parts - MM-DD-YYYY"
+    End Select
+    
+    '-------------------------------------------------------------------
+    ' STEP 2: Ask user for the "XX" value
+    '-------------------------------------------------------------------
+    userXX = InputBox("Enter the value for 'XX':", "Enter XX")
+    If Trim(userXX) = "" Then
+        MsgBox "No value entered for 'XX'. Sheet creation cancelled.", vbExclamation
+        Exit Sub
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 3: Ask user for the date (MM-DD-YYYY)
+    '-------------------------------------------------------------------
+    userDate = InputBox("Enter the date (MM-DD-YYYY):", "Enter Date", Format(Date, "MM-DD-YYYY"))
+    If Trim(userDate) = "" Then
+        MsgBox "No date entered. Sheet creation cancelled.", vbExclamation
+        Exit Sub
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 4: Construct the final sheet name from the template
+    '-------------------------------------------------------------------
+    sheetName = Replace(templateStr, "XX", Trim(userXX))
+    sheetName = Replace(sheetName, "MM-DD-YYYY", Trim(userDate))
+    
+    ' Validate final sheet name
+    invalidChars = "\/[]?*:"  ' Excel disallows these characters.
+    isValidName = True
+    For i = 1 To Len(invalidChars)
+        If InStr(sheetName, Mid(invalidChars, i, 1)) > 0 Then
+            MsgBox "Sheet name cannot contain the character: " & Mid(invalidChars, i, 1), vbExclamation
+            Exit Sub
+        End If
+    Next i
+    
+    If Len(sheetName) > 31 Then
+        MsgBox "Sheet name cannot exceed 31 characters.", vbExclamation
+        Exit Sub
+    End If
+    
+    Debug.Print "Final sheet name: " & sheetName
+    
+    '-------------------------------------------------------------------
+    ' STEP 5: Check if the sheet already exists
+    '-------------------------------------------------------------------
+    If SheetExists(sheetName) Then
+        If MsgBox("Sheet '" & sheetName & "' already exists. Overwrite it?", vbYesNo + vbExclamation, "Confirm Overwrite") = vbNo Then
+            Exit Sub
+        Else
+            Application.DisplayAlerts = False
+            ThisWorkbook.Sheets(sheetName).Delete
+            Application.DisplayAlerts = True
+        End If
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 6: Create the new worksheet and export data
+    '-------------------------------------------------------------------
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    wsNew.Name = sheetName
+    Debug.Print "Created Sheet: " & wsNew.Name
+
+     currentDate = Format(Date, "mmmm dd, yyyy")
+    
+    ' Add headers and format the new sheet
+    With wsNew
+        .Range("A1:G1").Merge
+        .Range("A1").Value = sheetName & " - " & currentDate
+        .Range("A1").HorizontalAlignment = xlCenter
+        .Range("A1").Font.Bold = True
+        .Range("A1").Font.Size = 14
+
+        ' Define column headers
+        .Cells(2, 1).Value = "Bin"
+        .Cells(2, 2).Value = "Item"
+        .Cells(2, 3).Value = "Description"
+        .Cells(2, 4).Value = "P21 Count"
+        .Cells(2, 5).Value = "Actual Count"
+        .Cells(2, 6).Value = "Discrepancy"
+        .Cells(2, 7).Value = "Notes"
+
+        Set headerRange = .Range("A2:G2")
+        headerRange.Font.Bold = True
+        headerRange.Interior.Color = RGB(200, 200, 200)
+        headerRange.HorizontalAlignment = xlCenter
+        headerRange.Borders.LineStyle = xlContinuous
+    End With
+    
+    '-------------------------------------------------------------------
+    ' STEP 7: Transfer Selected Bin-Part Data to the New Sheet
+    '-------------------------------------------------------------------
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    newRow = 3  ' Data starts at row 3
+
+    For rowIndex = 2 To lastRow
+        matchBin = Trim(wsSource.Cells(rowIndex, 1).Value)
+        matchPart = Trim(wsSource.Cells(rowIndex, 2).Value)
+
+        Debug.Print "Checking Bin: " & matchBin & " | Part: " & matchPart  ' Debugging check
+
+        If dictSelected.exists(matchBin & "|" & matchPart) Then
+            With wsNew
+                .Cells(newRow, 1).Value = matchBin
+                .Cells(newRow, 2).Value = "'" & matchPart
+                .Cells(newRow, 3).Value = wsSource.Cells(rowIndex, 3).Value
+                .Cells(newRow, 4).Value = wsSource.Cells(rowIndex, 6).Value
+                .Cells(newRow, 5).Value = ""  ' Actual Count left blank
+                .Cells(newRow, 6).Formula = "=E" & newRow & "-D" & newRow
+                .Cells(newRow, 7).Value = ""  ' Notes
+            End With
+            newRow = newRow + 1
+        End If
+    Next rowIndex
+    
+    ' -------------------------------------------------------------------
+    ' STEP 8: Apply Formatting to the Worksheet
+    ' -------------------------------------------------------------------
+    
+    ' Format title row
+    With wsNew.Range("A1:G1")
+    .Merge
+    .Font.Size = 14
+    .Font.Bold = True
+    .HorizontalAlignment = xlCenter
+    End With
+
+    ' Format headers
+    With wsNew.Range("A2:G2")
+    .Font.Bold = True
+    .Interior.Color = RGB(200, 200, 200)  ' Light gray background
+    .HorizontalAlignment = xlCenter
+    .Borders.LineStyle = xlContinuous
+    End With
+
+    ' Set column widths for readability
+    With wsNew
+    .Columns("A").ColumnWidth = 18
+    .Columns("B").AutoFit
+    .Columns("C").AutoFit
+    .Columns("D").ColumnWidth = 15
+    .Columns("E").ColumnWidth = 15
+    .Columns("F").ColumnWidth = 15
+    .Columns("G").ColumnWidth = 30
+    .Columns("B").NumberFormat = "@"
+    End With
+
+    ' Set row heights for readability
+    Dim r As Long
+    For r = 1 To wsNew.UsedRange.Rows.Count
+    wsNew.Rows(r).rowHeight = 25
+    Next r
+    
+    ' Format Column B as Text to preserve leading zeros
+    wsNew.Columns("B").NumberFormat = "@"
+
+    ' Format numeric columns
+    With wsNew
+    .Range("D3:D" & wsNew.UsedRange.Rows.Count).NumberFormat = "0"
+    .Range("F3:F" & wsNew.UsedRange.Rows.Count).NumberFormat = "0"
+    End With
+
+    ' Freeze panes at row 3 for scrolling convenience
+    With wsNew
+    .Activate
+    .Range("A3").Select
+    ActiveWindow.FreezePanes = True
+    End With
+
+    ' Apply conditional formatting to highlight discrepancies
+    lastDataRow = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).Row
+    Set rng = wsNew.Range("A3:G" & lastDataRow)
+    rng.FormatConditions.Delete
+    With rng.FormatConditions.Add(Type:=xlExpression, Formula1:="=$F3<>0")
+    .Interior.Color = RGB(255, 255, 153)  ' Light yellow background for discrepancies
+    End With
+
+    ' Sort the sheet by Bin (Column A)
+    With wsNew.Sort
+    .SortFields.Clear
+    .SortFields.Add key:=wsNew.Range("A3:A" & lastDataRow), _
+                    SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+    .SetRange wsNew.Range("A2:G" & lastDataRow)
+    .Header = xlYes
+    .Apply
+    End With
+    
+    ' Apply borders to all used cells
+    With wsNew.UsedRange.Borders
+    .LineStyle = xlContinuous
+    .Weight = xlThin
+    .ColorIndex = xlAutomatic
+    End With
+
+    MsgBox "Export completed successfully!", vbInformation, "Export Done"
+
+    Exit Sub
+
+ExportError:
+    MsgBox "An error occurred during export: " & Err.description, vbCritical, "Export Error"
+End Sub
+
+Private Sub cmdRefresh_Click()
+    ' Event: Refresh Items and lstboxBins with 5-second delay
+    ' Show BACKGROUND sheet during and after refresh
+
+    Application.Wait (Now + TimeValue("0:00:05")) ' Optional: Wait 5 seconds
+
+    ThisWorkbook.RefreshAll ' Refresh all external data connections
+End Sub
+
+Private Sub cmdTransfer_Click()
+    ' This procedure transfers selected items from the source list box
+    ' (lstPartsandBins) to the destination list box (lstboxCountList).
+    
+    Dim i As Long
+    Dim binVal As String
+    Dim partVal As String
+    Dim qtyVal As Variant
+    Dim listIndex As Long
+    
+    ' Loop through all items in lstPartsandBins
+    For i = 0 To lstPartsandBins.ListCount - 1
+        ' Check if the current item is selected
+        If lstPartsandBins.Selected(i) Then
+            ' Retrieve values from the selected row
+            binVal = CStr(lstPartsandBins.List(i, 0))
+            partVal = CStr(lstPartsandBins.List(i, 1))
+            qtyVal = lstPartsandBins.List(i, 2)
+            
+            ' Add the bin value to the destination list box; this creates a new row.
+            lstboxCountList.AddItem binVal
+            
+            ' Get the index of the newly added item.
+            listIndex = lstboxCountList.ListCount - 1
+            
+            ' Fill in additional columns for the new row.
+            ' Column 1: Part value
+            lstboxCountList.List(listIndex, 1) = partVal
+            ' Column 2: Quantity value
+            lstboxCountList.List(listIndex, 2) = qtyVal
+        End If
+    Next i
+End Sub
+
+Private Sub lstboxParts_Click()
+    Dim selectedPart As String
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim partVal As String
+    Dim binVal As String
+    Dim qtyVal As Variant
+    
+    ' Clear the "Parts and Bins" listbox and set its column widths.
+    lstPartsandBins.Clear
+    lstPartsandBins.ColumnWidths = "50 pt;70 pt;42 pt"  ' Bin, Part, Quantity
+    
+    ' Get the selected part from lstboxParts.
+    selectedPart = Trim(lstboxParts.Value)
+    If selectedPart = "" Then Exit Sub
+    
+    ' Reference the Items sheet.
+    Set ws = ThisWorkbook.Sheets("Items")
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    
+    ' Loop through the Items sheet to find all rows where Column B matches the selected part.
+    For i = 2 To lastRow
+        partVal = CStr(ws.Cells(i, "B").Value)
+        ' Use a case-insensitive comparison.
+        If StrComp(Trim(partVal), selectedPart, vbTextCompare) = 0 Then
+            binVal = CStr(ws.Cells(i, "A").Value)
+            qtyVal = ws.Cells(i, "F").Value
+            
+            ' Handle empty quantity gracefully.
+            If IsEmpty(qtyVal) Or Trim(qtyVal & "") = "" Then qtyVal = 0
+            
+            ' Add a new item to lstPartsandBins.
+            ' Column 0: Bin, Column 1: Part, Column 2: Quantity.
+            lstPartsandBins.AddItem binVal
+            lstPartsandBins.List(lstPartsandBins.ListCount - 1, 1) = partVal
+            lstPartsandBins.List(lstPartsandBins.ListCount - 1, 2) = qtyVal
+        End If
+    Next i
+End Sub
+
+' Make sure to declare the variable "allParts" at the module level if needed:
+' Public allParts As Variant
+
+Private Sub UserForm_Initialize()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim partsRange As Range
+    Dim cell As Range
+    Dim dict As Object
+    Dim partList As Collection
+    Dim i As Long
+    
+    ' Reference the "Items" worksheet.
+    Set ws = ThisWorkbook.Sheets("Items")
+    
+    ' Find the last used row in Column B (assumes parts are listed in Column B).
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    
+    ' Define the range from B2 to the last row.
+    Set partsRange = ws.Range("B2:B" & lastRow)
+    
+    ' Initialize a dictionary and collection to store unique part names.
+    Set dict = CreateObject("Scripting.Dictionary")
+    Set partList = New Collection
+    
+    ' Loop through each cell in the parts range to collect unique part names.
+    For Each cell In partsRange
+        If Not IsEmpty(cell.Value) Then
+            ' Use Trim to eliminate extra spaces.
+            If Not dict.exists(Trim(cell.Value)) Then
+                dict.Add Trim(cell.Value), Nothing
+                partList.Add Trim(cell.Value)
+            End If
+        End If
+    Next cell
+    
+    ' Store the unique parts into an array called allParts.
+    ' (Ensure that allParts is declared at the module-level if you will be accessing it elsewhere.)
+    ReDim allParts(1 To partList.Count)
+    For i = 1 To partList.Count
+        allParts(i) = partList(i)
+    Next i
+    
+    ' Populate the listbox with all parts.
+    ' This call assumes that you have a procedure "LoadPartsIntoListbox" that accepts a search string.
+    LoadPartsIntoListbox ""
+    
+    ' Set the size of the UserForm.
+    Me.Height = 267.75  ' Adjust the height as needed.
+    Me.Width = 531.75   ' Adjust the width as needed.
+    
+    ' Optionally, center the UserForm on the screen.
+    ' Uncomment and adjust these lines if manual positioning is preferred.
+    ' Me.StartUpPosition = 0 ' Set to manual positioning.
+    ' Me.Left = (Application.Width - Me.Width) / 2
+    ' Me.Top = (Application.Height - Me.Height) / 2
+End Sub
+
+Private Sub txtPartSearch_Change()
+    ' Filter the listbox based on search input
+    Dim searchText As String
+    searchText = LCase(Me.txtPartSearch.Text)
+    Call LoadPartsIntoListbox(searchText)
+End Sub
+
+Private Sub LoadPartsIntoListbox(filterText As String)
+    Dim i As Long
+    Dim item As String
+
+    filterText = Trim(LCase(filterText))
+    lstboxParts.Clear
+
+    For i = LBound(allParts) To UBound(allParts)
+        item = allParts(i)
+        If LCase(item) Like "*" & filterText & "*" Then
+            lstboxParts.AddItem item
+        End If
+    Next i
+End Sub
+
+Sub UpdateHoldListFromItems()
+    Dim wsHold As Worksheet, wsItems As Worksheet
+    Dim lastHoldRow As Long, lastItemRow As Long
+    Dim holdRow As Long, itemRow As Long
+    Dim holdPart As String, holdBin As String, holdQty As Variant
+    Dim itemPart As String, itemBin As String, itemQty As Variant
+    Dim matchFound As Boolean
+    
+    ' Set worksheet references
+    Set wsHold = ThisWorkbook.Sheets("HoldList")
+    Set wsItems = ThisWorkbook.Sheets("Items")
+    
+    ' Determine last used row in HoldList (Assumes header is in row 1)
+    lastHoldRow = wsHold.Cells(wsHold.Rows.Count, "A").End(xlUp).Row
+    
+    ' Loop backwards through HoldList to safely delete obsolete rows
+    For holdRow = lastHoldRow To 2 Step -1
+        holdPart = wsHold.Cells(holdRow, "A").Value
+        holdBin = wsHold.Cells(holdRow, "B").Value
+        holdQty = wsHold.Cells(holdRow, "C").Value
+        
+        matchFound = False
+        
+        ' Determine the last used row in Items (Assumes header in row 1)
+        lastItemRow = wsItems.Cells(wsItems.Rows.Count, "A").End(xlUp).Row
+        
+        ' Loop through Items to find a matching record (matching both bin and part)
+        For itemRow = 2 To lastItemRow
+            itemBin = wsItems.Cells(itemRow, "A").Value
+            itemPart = wsItems.Cells(itemRow, "B").Value
+            
+            If holdBin = itemBin And holdPart = itemPart Then
+                matchFound = True
+                itemQty = wsItems.Cells(itemRow, "F").Value
+                
+                ' Update the hold quantity if it's changed.
+                If itemQty <> holdQty Then
+                    wsHold.Cells(holdRow, "C").Value = itemQty
+                    ' Optionally, add a comment to indicate the update.
+                    On Error Resume Next
+                    wsHold.Cells(holdRow, "A").ClearComments
+                    wsHold.Cells(holdRow, "A").AddComment "Updated Qty from " & holdQty & " to " & itemQty
+                    On Error GoTo 0
+                End If
+                
+                Exit For ' Stop looking once a match is found.
+            End If
+        Next itemRow
+        
+        ' If no match found, delete the hold list row (obsolete record).
+        If Not matchFound Then
+            wsHold.Rows(holdRow).Delete
+        End If
+    Next holdRow
+End Sub
