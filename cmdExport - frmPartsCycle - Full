@@ -1,0 +1,269 @@
+Private Sub cmdExport_Click()
+    On Error GoTo ExportError
+
+    Dim wsSource As Worksheet, wsNew As Worksheet
+    Dim lastRow As Long, rowIndex As Long, newRow As Long
+    Dim sheetName As String
+    Dim i As Long, templateChoice As Integer
+    Dim userInput As String, userXX As String, userDate As String
+    Dim currentDate As String
+    Dim headerRange As Range, dataRange As Range
+    Dim invalidChars As String, isValidName As Boolean
+    Dim selectedBin As String, selectedPart As String
+    Dim matchBin As String, matchPart As String
+    Dim lastDataRow As Long
+    Dim dictSelected As Object
+    Dim rng As Range
+    Dim templateStr As String
+
+    ' Initialize source worksheet and dictionary for selected Bin+Part pairs
+    Set wsSource = ThisWorkbook.Sheets("Items")
+    Set dictSelected = CreateObject("Scripting.Dictionary")
+    
+    ' Ensure there are items in lstboxCountList BEFORE exporting
+    If lstboxCountList.ListCount = 0 Then
+        MsgBox "No bins/items available for export.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Build dictionary of "Bin|Part" keys for selected items
+    For i = 0 To lstboxCountList.ListCount - 1
+        selectedBin = lstboxCountList.List(i, 0)
+        selectedPart = lstboxCountList.List(i, 1)
+        dictSelected(Trim(selectedBin) & "|" & Trim(selectedPart)) = True
+    Next i
+
+    Debug.Print "Total Selected Bins/Parts: " & dictSelected.Count  ' Debugging check
+
+    '-------------------------------------------------------------------
+    ' STEP 1: Ask user for template selection via InputBox:
+    '-------------------------------------------------------------------
+    Dim tempMsg As String
+    tempMsg = "**SELECT A TEMPLATE**" & vbCrLf & vbCrLf & _
+          "1) **MAIN BIN CYCLE COUNT**" & vbCrLf & "    BCC – XX Bins – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "2) **SHORTAGE CYCLE COUNT**" & vbCrLf & "    SCC – XX Parts – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "3) **MULTI-PART CYCLE COUNT**" & vbCrLf & "    MPCC – XX Parts – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "4) **MULTI BIN CYCLE COUNT**" & vbCrLf & "    MBCC – XX Bins – MM-DD-YYYY" & vbCrLf & vbCrLf & _
+          "5) **INVOICE TO P21 DISCREPANCY**" & vbCrLf & "    IP21D - XX Parts - MM-DD-YYYY"
+
+    userInput = InputBox(tempMsg, "Select Template")
+
+    
+    If userInput = "" Or Not IsNumeric(userInput) Then
+        MsgBox "Invalid selection. Please enter a number between 1-5.", vbExclamation
+        Exit Sub
+    End If
+    
+    templateChoice = CInt(userInput)
+    If templateChoice < 1 Or templateChoice > 5 Then
+        MsgBox "Invalid selection. Please enter a number between 1-5.", vbExclamation
+        Exit Sub
+    End If
+    
+    Select Case templateChoice
+        Case 1: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 2: templateStr = "SCC – XX Parts – MM-DD-YYYY"
+        Case 3: templateStr = "MPCC – XX Parts – MM-DD-YYYY"
+        Case 4: templateStr = "MBCC – XX Bins – MM-DD-YYYY"
+        Case 5: templateStr = "IP21D - XX Parts - MM-DD-YYYY"
+    End Select
+    
+    '-------------------------------------------------------------------
+    ' STEP 2: Ask user for the "XX" value
+    '-------------------------------------------------------------------
+    userXX = InputBox("Enter Bin Count for 'XX':", "Count Value")
+    If Trim(userXX) = "" Then
+        MsgBox "No value entered for 'XX'. Sheet creation cancelled.", vbExclamation
+        Exit Sub
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 3: Ask user for the date (MM-DD-YYYY)
+    '-------------------------------------------------------------------
+    userDate = InputBox("Enter the date (MM-DD-YYYY):", "Enter Date", Format(Date, "MM-DD-YYYY"))
+    If Trim(userDate) = "" Then
+        MsgBox "No date entered. Sheet creation cancelled.", vbExclamation
+        Exit Sub
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 4: Construct the final sheet name from the template
+    '-------------------------------------------------------------------
+    sheetName = Replace(templateStr, "XX", Trim(userXX))
+    sheetName = Replace(sheetName, "MM-DD-YYYY", Trim(userDate))
+    
+    ' Validate final sheet name
+    invalidChars = "\/[]?*:"  ' Excel disallows these characters.
+    isValidName = True
+    For i = 1 To Len(invalidChars)
+        If InStr(sheetName, Mid(invalidChars, i, 1)) > 0 Then
+            MsgBox "Sheet name cannot contain the character: " & Mid(invalidChars, i, 1), vbExclamation
+            Exit Sub
+        End If
+    Next i
+    
+    If Len(sheetName) > 31 Then
+        MsgBox "Sheet name cannot exceed 31 characters.", vbExclamation
+        Exit Sub
+    End If
+    
+    Debug.Print "Final sheet name: " & sheetName
+    
+    '-------------------------------------------------------------------
+    ' STEP 5: Check if the sheet already exists
+    '-------------------------------------------------------------------
+    If sheetExists(sheetName) Then
+        If MsgBox("Sheet '" & sheetName & "' already exists. Overwrite it?", vbYesNo + vbExclamation, "Confirm Overwrite") = vbNo Then
+            Exit Sub
+        Else
+            Application.DisplayAlerts = False
+            ThisWorkbook.Sheets(sheetName).Delete
+            Application.DisplayAlerts = True
+        End If
+    End If
+    
+    '-------------------------------------------------------------------
+    ' STEP 6: Create the new worksheet and export data
+    '-------------------------------------------------------------------
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    wsNew.Name = sheetName
+    Debug.Print "Created Sheet: " & wsNew.Name
+
+     currentDate = Format(Date, "mmmm dd, yyyy")
+    
+    ' Add headers and format the new sheet
+    With wsNew
+        .Range("A1:G1").Merge
+        .Range("A1").Value = sheetName & " - " & currentDate
+        .Range("A1").HorizontalAlignment = xlCenter
+        .Range("A1").Font.Bold = True
+        .Range("A1").Font.Size = 14
+
+        ' Define column headers
+        .Cells(2, 1).Value = "Bin"
+        .Cells(2, 2).Value = "Item"
+        .Cells(2, 3).Value = "Description"
+        .Cells(2, 4).Value = "P21 Count"
+        .Cells(2, 5).Value = "Actual Count"
+        .Cells(2, 6).Value = "Discrepancy"
+        .Cells(2, 7).Value = "Notes"
+
+        Set headerRange = .Range("A2:G2")
+        headerRange.Font.Bold = True
+        headerRange.Interior.Color = RGB(200, 200, 200)
+        headerRange.HorizontalAlignment = xlCenter
+        headerRange.Borders.LineStyle = xlContinuous
+    End With
+    
+    '-------------------------------------------------------------------
+    ' STEP 7: Transfer Selected Bin-Part Data to the New Sheet
+    '-------------------------------------------------------------------
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    newRow = 3  ' Data starts at row 3
+
+    For rowIndex = 2 To lastRow
+        matchBin = Trim(wsSource.Cells(rowIndex, 1).Value)
+        matchPart = Trim(wsSource.Cells(rowIndex, 2).Value)
+
+        Debug.Print "Checking Bin: " & matchBin & " | Part: " & matchPart  ' Debugging check
+
+        If dictSelected.exists(matchBin & "|" & matchPart) Then
+            With wsNew
+                .Cells(newRow, 1).Value = matchBin
+                .Cells(newRow, 2).Value = "'" & matchPart
+                .Cells(newRow, 3).Value = wsSource.Cells(rowIndex, 3).Value
+                .Cells(newRow, 4).Value = wsSource.Cells(rowIndex, 6).Value
+                .Cells(newRow, 5).Value = ""  ' Actual Count left blank
+                .Cells(newRow, 6).Formula = "=E" & newRow & "-D" & newRow
+                .Cells(newRow, 7).Value = ""  ' Notes
+            End With
+            newRow = newRow + 1
+        End If
+    Next rowIndex
+    
+    ' -------------------------------------------------------------------
+    ' STEP 8: Apply Formatting to the Worksheet
+    ' -------------------------------------------------------------------
+    
+    ' Format title row
+    With wsNew.Range("A1:G1")
+    .Merge
+    .Font.Size = 14
+    .Font.Bold = True
+    .HorizontalAlignment = xlCenter
+    End With
+
+    ' Format headers
+    With wsNew.Range("A2:G2")
+    .Font.Bold = True
+    .Interior.Color = RGB(200, 200, 200)  ' Light gray background
+    .HorizontalAlignment = xlCenter
+    .Borders.LineStyle = xlContinuous
+    End With
+
+    ' Set column widths for readability
+    With wsNew
+    .Columns("A").ColumnWidth = 18
+    .Columns("B").AutoFit
+    .Columns("C").AutoFit
+    .Columns("D").ColumnWidth = 15
+    .Columns("E").ColumnWidth = 15
+    .Columns("F").ColumnWidth = 15
+    .Columns("G").ColumnWidth = 30
+    .Columns("B").NumberFormat = "@"
+    End With
+
+    ' Set row heights for readability
+    Dim r As Long
+    For r = 1 To wsNew.UsedRange.Rows.Count
+    wsNew.Rows(r).rowHeight = 25
+    Next r
+    
+    ' Format Column B as Text to preserve leading zeros
+    wsNew.Columns("B").NumberFormat = "@"
+
+    ' Format numeric columns
+    With wsNew
+    .Range("D3:D" & wsNew.UsedRange.Rows.Count).NumberFormat = "0"
+    .Range("F3:F" & wsNew.UsedRange.Rows.Count).NumberFormat = "0"
+    End With
+
+    ' Freeze panes at row 3 for scrolling convenience
+    With wsNew
+    .Activate
+    .Range("A3").Select
+    ActiveWindow.FreezePanes = True
+    End With
+
+    ' Apply conditional formatting to highlight discrepancies
+    lastDataRow = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).Row
+    Set rng = wsNew.Range("A3:G" & lastDataRow)
+    rng.FormatConditions.Delete
+    With rng.FormatConditions.Add(Type:=xlExpression, Formula1:="=$F3<>0")
+    .Interior.Color = RGB(255, 255, 153)  ' Light yellow background for discrepancies
+    End With
+
+    ' Sort the sheet by Bin (Column A)
+    With wsNew.Sort
+    .SortFields.Clear
+    .SortFields.Add key:=wsNew.Range("A3:A" & lastDataRow), _
+                    SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+    .SetRange wsNew.Range("A2:G" & lastDataRow)
+    .Header = xlYes
+    .Apply
+    End With
+    
+    ' Apply borders to all used cells
+    With wsNew.UsedRange.Borders
+    .LineStyle = xlContinuous
+    .Weight = xlThin
+    .ColorIndex = xlAutomatic
+    End With
+
+    MsgBox "Export completed successfully!", vbInformation, "Export Done"
+
+    Exit Sub
+
+ExportError:
+    MsgBox "An error occurred during export: " & Err.description, vbCritical, "Export Error"
+End Sub
